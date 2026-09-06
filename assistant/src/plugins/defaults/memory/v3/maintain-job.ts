@@ -19,7 +19,13 @@
  *      failures (and is captured before any potential mtime bumps) so a page
  *      is not re-embedded forever, yet a page whose embed failed (and whose
  *      sections were therefore left deleted) stays above the mark and is
- *      retried next pass.
+ *      retried next pass. On a version rebuild the commit also waits for
+ *      every stored capability row: one whose body renders empty in this
+ *      process (its capability cache unseeded, or the capability gone)
+ *      keeps its points, so the commit is settled only after the
+ *      deleted-page prune (stage 3) has had its chance to remove it, and a
+ *      row still standing holds the commit, and the rebuild marker, for a
+ *      later pass.
  *   2. **Capability reconcile**: embed capability rows (synthetic skill/CLI
  *      slugs) present in the page index but missing from the section store. The
  *      re-embed delta above EXCLUDES capability rows (they have `modifiedAt` 0,
@@ -34,7 +40,10 @@
  *      index. A deleted page's slug never reaches the re-embed delta selector
  *      (it only names live pages), so without this its section points would
  *      linger in Qdrant and the dense lane could still surface the deleted page.
- *      Synthetic capability rows are in the page index, so they are never pruned.
+ *      A capability row the page index lists is never pruned; one it does not
+ *      list (the capability gone, or this process's capability caches
+ *      unseeded, which lists none) is pruned like a deleted page, and that
+ *      removal also settles the version-rebuild commit stage 1 deferred.
  *   4. **Core-set validation** — load the maintainer-curated core set
  *      (`memory/core-pages.md`) and report entries whose page no longer exists
  *      in the page index (dangling slugs) via the log + outcome. The file is
@@ -150,9 +159,11 @@ export interface MaintainJobDeps {
   /**
    * Persist the high-water mark after a re-embed pass with zero failures. The
    * value is captured before the pass's writes (see the key docstring); the
-   * caller skips this when any page failed so failed pages retry next pass.
-   * The real commit (`commitSectionEmbedHighWater`) also releases the dense
-   * read hold a forced chunker rebuild put in place.
+   * caller skips this when any page failed so failed pages retry next pass,
+   * and a version rebuild defers it past the deleted-page prune while a
+   * stored capability row it could not rebuild remains. The real commit
+   * (`commitSectionEmbedHighWater`) also releases the dense read hold a
+   * forced chunker rebuild put in place.
    */
   commitEmbedHighWater: (highWaterMs: number) => void;
   /**
@@ -279,6 +290,14 @@ export interface MaintainOutcome {
   reembedded: number;
   /** Re-embeds that threw (and were contained). */
   reembedFailures: number;
+  /**
+   * Stored capability rows (skills/CLI) a version-triggered rebuild left with
+   * the previous chunker's points at the end of this pass: their body
+   * rendered empty here (this process's capability caches do not resolve
+   * them) and the deleted-page prune did not remove them. The embed
+   * checkpoint and the dense-read hold wait while any remain.
+   */
+  unrebuiltCapabilityRows: Slug[];
   /**
    * Capability rows (skills/CLI) present in the index but missing from the
    * section store that were embedded this pass — how a skill enabled after the
@@ -503,64 +522,63 @@ async function reembedChangedPages(
 async function reconcileCapabilityRows(
   deps: MaintainJobDeps,
 ): Promise<{ capabilitiesReconciled: number; reconcileFailures: number }> {
-  const { missing } = await capabilityRowsByPresence(deps);
+  const missing = await missingCapabilityRows(deps);
   const { embedded, failed } = await refreshCapabilityRows(missing, deps);
   return { capabilitiesReconciled: embedded, reconcileFailures: failed };
 }
 
 /**
- * The capability slugs (synthetic skill/CLI rows) the page index lists, split
- * by whether the section dense store currently holds points for them.
- * `missing` is what {@link reconcileCapabilityRows} embeds; `present` is what
- * a version-triggered rebuild re-embeds, since the change-delta selector never
- * names a capability row and the stored points would otherwise keep the
- * previous chunker's boundaries.
+ * The capability slugs (synthetic skill/CLI rows) the page index lists that
+ * the section dense store holds no points for: what
+ * {@link reconcileCapabilityRows} embeds.
  */
-async function capabilityRowsByPresence(
-  deps: MaintainJobDeps,
-): Promise<{ present: Slug[]; missing: Slug[] }> {
+async function missingCapabilityRows(deps: MaintainJobDeps): Promise<Slug[]> {
   const [indexedSlugs, storedArticles] = await Promise.all([
     deps.listIndexedSlugs(),
     deps.listSectionArticles(),
   ]);
   const stored = new Set(storedArticles);
-  const present: Slug[] = [];
-  const missing: Slug[] = [];
-  for (const slug of indexedSlugs) {
-    if (!isCapabilitySlug(slug)) {
-      continue;
-    }
-    if (stored.has(slug)) {
-      present.push(slug);
-    } else {
-      missing.push(slug);
-    }
-  }
-  return { present, missing };
+  return indexedSlugs.filter(
+    (slug) => isCapabilitySlug(slug) && !stored.has(slug),
+  );
+}
+
+/**
+ * The capability rows the section dense store currently holds points for:
+ * what a version-triggered rebuild re-embeds, since the change-delta selector
+ * never names a capability row and the stored points would otherwise keep
+ * the previous chunker's boundaries. Read from the store rather than the page
+ * index: an index built while this process's capability caches are unseeded
+ * lists no capability row, and a stored row it omits still carries the old
+ * points.
+ */
+async function storedCapabilityRows(deps: MaintainJobDeps): Promise<Slug[]> {
+  return (await deps.listSectionArticles()).filter(isCapabilitySlug);
 }
 
 /**
  * Re-chunk + re-embed capability rows from their rendered capability bodies
  * (`readCapabilityBody`). Each row is independent: a single build/delete/upsert
  * throw is logged and counted in `failed` without aborting the rest. A row
- * whose body resolves empty is counted in `cold` and skipped WITHOUT deleting
+ * whose body resolves empty is listed in `cold` and skipped WITHOUT deleting
  * any points (never replace good points with a blank): a capability store that
  * has not seeded yet renders every row empty, and a slug the index lists but
- * no store resolves renders empty on every pass, so callers retry cold rows on
- * a later pass rather than fail the pass on them.
+ * no store resolves renders empty on every pass. What a cold row means is the
+ * caller's: the reconcile stage retries it on a later pass, and a version
+ * rebuild holds its commit on it (see {@link maintainJob}).
  */
 async function refreshCapabilityRows(
   slugs: Slug[],
   deps: MaintainJobDeps,
-): Promise<{ embedded: number; failed: number; cold: number }> {
+): Promise<{ embedded: number; failed: number; cold: Slug[] }> {
   let embedded = 0;
   let failed = 0;
-  let cold = 0;
+  const cold: Slug[] = [];
   for (const slug of slugs) {
     try {
       const body = await deps.readCapabilityBody(slug);
       if (body.trim().length === 0) {
-        cold += 1;
+        cold.push(slug);
         continue;
       }
       const index = await deps.buildSectionIndex(
@@ -591,12 +609,15 @@ async function refreshCapabilityRows(
  * diffing against the live slug set.
  *
  * Each deletion is independent: a single `deleteSectionsForArticle` throw is
- * logged and counted in `pruneFailures` without aborting the rest. Synthetic
- * capability rows are in the page index, so they are never pruned.
+ * logged and counted in `pruneFailures` without aborting the rest. A
+ * capability row the page index lists is never pruned; one it does not list
+ * is pruned like any deleted page, and the pruned articles are returned so a
+ * version rebuild's deferred commit can settle on them (see
+ * {@link maintainJob}).
  */
 async function pruneDeletedPages(
   deps: MaintainJobDeps,
-): Promise<{ pruned: number; pruneFailures: number }> {
+): Promise<{ prunedArticles: string[]; pruneFailures: number }> {
   const [storedArticles, indexedSlugs] = await Promise.all([
     deps.listSectionArticles(),
     deps.listIndexedSlugs(),
@@ -604,12 +625,12 @@ async function pruneDeletedPages(
   const live = new Set(indexedSlugs);
   const deleted = storedArticles.filter((article) => !live.has(article));
 
-  let pruned = 0;
+  const prunedArticles: string[] = [];
   let pruneFailures = 0;
   for (const article of deleted) {
     try {
       await deps.deleteSectionsForArticle(deps.config, article);
-      pruned += 1;
+      prunedArticles.push(article);
     } catch (err) {
       pruneFailures += 1;
       log.warn(
@@ -618,7 +639,7 @@ async function pruneDeletedPages(
       );
     }
   }
-  return { pruned, pruneFailures };
+  return { prunedArticles, pruneFailures };
 }
 
 /**
@@ -887,6 +908,7 @@ export async function maintainJob(
     disabled: false,
     reembedded: 0,
     reembedFailures: 0,
+    unrebuiltCapabilityRows: [],
     capabilitiesReconciled: 0,
     reconcileFailures: 0,
     pruned: 0,
@@ -908,6 +930,12 @@ export async function maintainJob(
   // Stage 1: re-chunk + re-embed pages changed since the last pass. Capture the
   // high-water mark BEFORE the pass so an embed write that bumps a page's mtime
   // does not re-trigger it next pass; advance it only when every page succeeded.
+  //
+  // The commit a version rebuild still owes after this stage: set when the
+  // pass had no embed failure but left stored capability rows it could not
+  // rebuild, and settled after the deleted-page prune (stage 3), the stage
+  // that removes such a row when the page index no longer lists it.
+  let deferredCommit: { highWaterMs: number; unrebuilt: Slug[] } | null = null;
   try {
     const startedAtMs = Date.now();
     // Establish the collection BEFORE selecting deltas. If it is absent or
@@ -933,22 +961,19 @@ export async function maintainJob(
     // already holds: the delta selector never names them (modifiedAt 0) and
     // the reconcile stage below embeds only rows missing from the store, so
     // without this their points would keep the previous chunker's boundaries
-    // past the commit that releases the dense-read hold. A cold row keeps its
-    // points and does not hold the commit (see refreshCapabilityRows).
+    // past the commit that releases the dense-read hold. A cold row (its body
+    // renders empty here: this process's capability caches are unseeded, or
+    // the capability is gone) keeps its points, and those points keep the
+    // old boundaries, so it holds the commit until it is rebuilt or removed.
+    let unrebuilt: Slug[] = [];
     if (rebuildPending) {
-      const { present } = await capabilityRowsByPresence(deps);
       const { embedded, failed, cold } = await refreshCapabilityRows(
-        present,
+        await storedCapabilityRows(deps),
         deps,
       );
       outcome.reembedded += embedded;
       outcome.reembedFailures += failed;
-      if (cold > 0) {
-        log.info(
-          { cold },
-          "memory-v3 maintain: chunker rebuild left capability rows whose body rendered empty untouched; they keep their points until a later pass resolves them",
-        );
-      }
+      unrebuilt = cold;
     }
     // Only advance the high-water mark when nothing failed. A failed article
     // is processed as delete-then-upsert, so a transient embed/Qdrant error
@@ -958,9 +983,13 @@ export async function maintainJob(
     // over a capability row whose points are gone. Holding the checkpoint
     // keeps every failed article in the next pass so it retries; the handful
     // of already-succeeded articles re-embedding again is idempotent and cheap.
-    if (outcome.reembedFailures === 0) {
-      deps.commitEmbedHighWater(startedAtMs);
-    } else {
+    // A commit over a cold capability row would likewise release the hold
+    // over points whose ordinals can name the wrong section, so with cold
+    // rows and no failure the commit is deferred until the deleted-page
+    // prune has run: a row the page index no longer lists leaves the store
+    // there, and a row still standing afterwards holds the commit, and the
+    // rebuild marker, for a later pass whose caches resolve it.
+    if (outcome.reembedFailures > 0) {
       log.info(
         {
           reembedded: outcome.reembedded,
@@ -968,6 +997,10 @@ export async function maintainJob(
         },
         "memory-v3 maintain: embed checkpoint held (embed failures); failed articles retry next pass",
       );
+    } else if (unrebuilt.length === 0) {
+      deps.commitEmbedHighWater(startedAtMs);
+    } else {
+      deferredCommit = { highWaterMs: startedAtMs, unrebuilt };
     }
   } catch (err) {
     outcome.failures.push("reembed");
@@ -999,18 +1032,50 @@ export async function maintainJob(
   // Stage 3: prune section points for pages deleted from the index. A deleted
   // page's slug never appears in `selectChangedPages` (the delta selector only
   // names live pages), so its lingering points are cleared by diffing the dense
-  // store's stored articles against the live page-index slugs. Contained: a
-  // failure is logged + recorded in `failures` without aborting invalidation.
+  // store's stored articles against the live page-index slugs. The articles
+  // it removes also settle the commit a version rebuild deferred (below).
+  // Contained: a failure is logged + recorded in `failures` without aborting
+  // invalidation.
   try {
-    const { pruned, pruneFailures } = await pruneDeletedPages(deps);
-    outcome.pruned = pruned;
+    const { prunedArticles, pruneFailures } = await pruneDeletedPages(deps);
+    outcome.pruned = prunedArticles.length;
     outcome.pruneFailures = pruneFailures;
+    if (deferredCommit) {
+      const pruned = new Set(prunedArticles);
+      deferredCommit.unrebuilt = deferredCommit.unrebuilt.filter(
+        (slug) => !pruned.has(slug),
+      );
+    }
   } catch (err) {
     outcome.failures.push("prune");
     log.warn(
       { err: err instanceof Error ? err.message : String(err) },
       "memory-v3 maintain: deleted-page prune failed (non-fatal)",
     );
+  }
+
+  // Settle the commit stage 1 deferred: a cold capability row the prune
+  // removed carries no stale points any more, so with none left the pass
+  // commits as a clean rebuild; otherwise the checkpoint and the rebuild
+  // marker stay put and the remaining rows are surfaced in the outcome.
+  if (deferredCommit) {
+    try {
+      if (deferredCommit.unrebuilt.length === 0) {
+        deps.commitEmbedHighWater(deferredCommit.highWaterMs);
+      } else {
+        outcome.unrebuiltCapabilityRows = deferredCommit.unrebuilt;
+        log.info(
+          { unrebuiltCapabilityRows: deferredCommit.unrebuilt },
+          "memory-v3 maintain: embed checkpoint held (stored capability rows this process cannot rebuild keep the previous chunker's points); they retry next pass",
+        );
+      }
+    } catch (err) {
+      outcome.failures.push("reembed");
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "memory-v3 maintain: deferred embed commit failed (non-fatal)",
+      );
+    }
   }
 
   // Stage 4: validate the maintainer-curated core set. Diff `core-pages.md`
@@ -1078,6 +1143,7 @@ export async function maintainJob(
     {
       reembedded: outcome.reembedded,
       reembedFailures: outcome.reembedFailures,
+      unrebuiltCapabilityRows: outcome.unrebuiltCapabilityRows,
       capabilitiesReconciled: outcome.capabilitiesReconciled,
       reconcileFailures: outcome.reconcileFailures,
       pruned: outcome.pruned,

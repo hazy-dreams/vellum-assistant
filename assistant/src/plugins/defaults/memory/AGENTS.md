@@ -203,7 +203,12 @@ chain) no frozen block from an earlier turn is in the prompt, so the sections
 injector renders every selection afresh, the pointer injector emits nothing,
 and assembly attaches the block to the transcript's tail in memory only,
 uncaptured and uncommitted: the store claims nothing and the valve is not
-scheduled.
+scheduled. The memory-prefix blocks assembly carries from the original tail
+onto the transcript leave out any v3-owned block whenever the injector
+produced one (a retry's anchor carries the first run's rehydrated frozen
+block), so each re-selected section reaches the model once, in the fresh
+block; with no v3 block that turn the anchor's block is carried as the
+turn's only memory.
 Each turn's pointer stays on the user message that was sent with it (persisted
 under `memoryV3PointerBlock` and rehydrated on load, like the frozen sections);
 a fresh one is spliced only onto the new tail, and assembly tail-strips a
@@ -216,8 +221,9 @@ block key is written only when the turn rendered net-new sections. A retry
 re-runs a turn onto its original anchor row after a reload, and assembly
 strips the anchor's old pointer and spotlight from the tail before
 re-injecting, so the deletions keep a reload from restoring what the rerun
-discarded. The anchor's rehydrated frozen block stays on the tail: a
-current-format one takes the rerun's net-new entries (`mergeIntoAnchorBlock`
+discarded. Outside a run-messages replacement (above), the anchor's
+rehydrated frozen block stays on the tail: a current-format one takes the
+rerun's net-new entries (`mergeIntoAnchorBlock`
 in `v3/prune.ts`, at assembly's Step 2), so the tail carries one merged block
 (the first run's entries, then the rerun's) and the persisted block gives every
 section the store claims a body that rehydrates; a legacy-format one (a
@@ -498,8 +504,12 @@ failure record and the section re-embed high-water:
   `sectionDenseReadsHeld` on every dense read), the lane init that first
   observes it enqueues `memory_v3_maintain` at once instead of waiting out the
   cadence key, and the maintain pass it names re-embeds every capability row
-  the store holds (the change delta never names one) before its commit clears
-  the marker
+  the store holds (the change delta never names one, and the page index lists
+  none while the process's capability caches are unseeded) before its commit
+  clears the marker: a stored row whose body renders empty in that process
+  holds the commit until a later pass rebuilds it or the deleted-page prune
+  removes it, so the marker never clears over points built by the previous
+  chunker
 - v1: `graph_maintenance:{decay,consolidate,pattern_scan,narrative}:last_run`,
   `pkb_filing_last_run`, `pkb_compaction_last_run`,
   `graph_bootstrap:*`, `memory:backfill:*`

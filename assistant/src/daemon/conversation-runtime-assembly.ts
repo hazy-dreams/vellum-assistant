@@ -69,6 +69,7 @@ import {
   stripPrunedSectionsFromMessages,
 } from "../plugins/defaults/memory/v3/prune.js";
 import {
+  isV3LiveBlock,
   markV3LiveBlock,
   MEMORY_V3_BLOCK_ID,
   MEMORY_V3_COMMIT_META_KEY,
@@ -2302,7 +2303,10 @@ function fallbackTurnTrust(
  *     carries no memory prefix of its own. The chain is told ahead of time
  *     that the replacement will fire (`replacesRunMessages` on the turn
  *     context, resolved with the transcript in step 1), and the memory-v3
- *     block then attaches to the replaced tail in memory only (step 4).
+ *     block then attaches to the replaced tail in memory only (step 4); a
+ *     memory-v3 block the original tail already carried (a retry's anchor)
+ *     is left off the transcript in that case, so the fresh render is the
+ *     prompt's single copy of each selected section.
  *  4. Apply the chain's `"after-memory-prefix"` blocks in ascending
  *     `order`. This runs BEFORE step 5's hardcoded prepends so the
  *     memory-prefix counter sees only the memory blocks on the tail —
@@ -2685,10 +2689,18 @@ export async function applyRuntimeInjections(
     // (and any memory-image groups) to the last user message before
     // runtime assembly runs. The Slack transcript is freshly rendered
     // from persisted rows and has no such prefix, so swap it in and then
-    // re-prepend the captured prefix onto the new tail user message.
+    // re-prepend the captured prefix onto the new tail user message. A
+    // v3-owned block on that tail (the first run's frozen block, rehydrated
+    // onto the anchor a retry re-runs) is left behind whenever v3 produced
+    // a block for this assembly: the sections injector rendered every
+    // selection afresh for the replacement, resident ones included, so
+    // carrying the anchor's block as well would put each re-selected
+    // section in the prompt twice. With no v3 block this turn the anchor's
+    // block is carried as the turn's only memory, the fallback the v2 tail
+    // strip above also keeps.
     const carriedMemoryBlocks = extractMemoryPrefixBlocks(
       runMessagesForAssembly,
-    );
+    ).filter((block) => !(memoryV3Active && isV3LiveBlock(block)));
     result = replaceBlock.messagesOverride;
     if (carriedMemoryBlocks.length > 0) {
       const slackTail = result[result.length - 1];
@@ -2739,8 +2751,10 @@ export async function applyRuntimeInjections(
   // persisted rows, so a block captured here would never reach a later
   // prompt, and the injector rendered every selection afresh for the
   // replacement (`replacesRunMessages` on the turn context) and attached
-  // no commit. An empty-text block (all-repeat turn) attaches nothing and
-  // captures nothing.
+  // no commit; Step 1 left a retried anchor's frozen block off the
+  // transcript, so the block spliced here is the prompt's only copy. An
+  // empty-text block (all-repeat turn) attaches nothing and captures
+  // nothing.
   for (const block of afterMemory) {
     if (block.id !== MEMORY_V3_BLOCK_ID) {
       result = applyInjectionBlock(result, block);

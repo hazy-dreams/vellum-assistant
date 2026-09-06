@@ -88,8 +88,10 @@
  * active or not, the pointer injector has nothing to point at, and the
  * block carries no commit: nothing is recorded, the valve is not scheduled,
  * and runtime assembly attaches the block to the transcript's tail in
- * memory only. The turn memo still remembers what the first produce
- * rendered, so a re-entry of such a turn re-emits the same bytes.
+ * memory only, leaving a retried anchor's rehydrated frozen block off the
+ * transcript so the fresh render is the single copy. The turn memo still
+ * remembers what the first produce rendered, so a re-entry of such a turn
+ * re-emits the same bytes.
  */
 
 import { getConfig } from "../../../../config/loader.js";
