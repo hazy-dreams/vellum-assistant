@@ -78,6 +78,18 @@
  * persisted user message, and the re-entry copy still in the live history
  * is superseded by the newest-copy rule at the assembly after that
  * (`stripPrunedSectionsFromMessages`).
+ *
+ * An assembly that replaces the run messages with a transcript rendered
+ * from persisted rows (`TurnContext.replacesRunMessages`: the Slack
+ * chronological transcript, on every Slack conversation) carries no frozen
+ * block from any earlier turn, because those blocks live only in message
+ * metadata. Residency means nothing in that prompt, so the sections
+ * injector renders every selection afresh, whether the store counts it
+ * active or not, the pointer injector has nothing to point at, and the
+ * block carries no commit: nothing is recorded, the valve is not scheduled,
+ * and runtime assembly attaches the block to the transcript's tail in
+ * memory only. The turn memo still remembers what the first produce
+ * rendered, so a re-entry of such a turn re-emits the same bytes.
  */
 
 import { getConfig } from "../../../../config/loader.js";
@@ -385,13 +397,16 @@ export const memoryV3Injector: Injector = {
       // re-entry never revives what the valve pruned), and a pair the first
       // produce saw resident whose copy a compaction's store reset has since
       // unclaimed (neither active nor tombstoned) renders anew, in memory
-      // only.
+      // only. Under a run-messages replacement no earlier block is in the
+      // prompt at all, so the store's active set is not consulted: every
+      // pair renders (or re-emits) and none is pointed at.
       const rendered = observedTurn(
         ctx.conversationId,
         ctx.turnIndex,
       )?.rendered;
       const firstProduce = rendered === undefined;
-      const active = getActiveSections(ctx.conversationId);
+      const replaced = ctx.replacesRunMessages === true;
+      const active = replaced ? null : getActiveSections(ctx.conversationId);
       const pruned = firstProduce
         ? undefined
         : getPrunedSections(ctx.conversationId);
@@ -408,7 +423,7 @@ export const memoryV3Injector: Injector = {
           slots.push({ slug, key, matched, text: reemitted });
           continue;
         }
-        if (sectionRefSetHas(active, slug, key)) {
+        if (active && sectionRefSetHas(active, slug, key)) {
           if (!isCapabilitySlug(slug)) {
             resident.push({ slug, key });
           }
@@ -461,6 +476,12 @@ export const memoryV3Injector: Injector = {
       }
 
       rememberRendered(ctx.conversationId, ctx.turnIndex, entries);
+      // A block rendered for a run-messages replacement rides that prompt
+      // only: no copy of it persists, so the store must not claim its
+      // sections and the valve has nothing new to account for.
+      if (replaced) {
+        return block;
+      }
       // The section-store write and the prune-valve schedule are DEFERRED to
       // this commit callback, invoked by runtime assembly at the point where
       // attachment is guaranteed (the turn's tail is a user message, the

@@ -972,3 +972,104 @@ describe("memoryV3PointerInjector: ephemeral resident-section pointer", () => {
     expect(await producePointer("conv-1", 1)).toBeNull();
   });
 });
+
+// ─── run-messages replacement ───────────────────────────────────────────────
+
+describe("memoryV3Injector: run-messages replacement (Slack transcript)", () => {
+  const alpha = section("page-a", "Alpha", "alpha section text");
+  const gamma = section("page-c", "Gamma", "gamma section text");
+
+  /** Produce for an assembly that replaces the run messages with a
+   *  transcript rendered from persisted rows, which runtime assembly states
+   *  on the turn context for every Slack conversation. */
+  function produceReplaced(conversationId: string, turnIndex: number) {
+    seedMemoryConfig();
+    return memoryV3Injector.produce({
+      requestId: "req-1",
+      conversationId,
+      turnIndex,
+      trust: GUARDIAN_TRUST as never,
+      replacesRunMessages: true,
+    });
+  }
+
+  function producePointerReplaced(conversationId: string, turnIndex: number) {
+    seedMemoryConfig();
+    return memoryV3PointerInjector.produce({
+      requestId: "req-1",
+      conversationId,
+      turnIndex,
+      trust: GUARDIAN_TRUST as never,
+      replacesRunMessages: true,
+    });
+  }
+
+  test("a resident section renders again with its body, nothing is pointed at, the block carries no commit, and the store is unchanged", async () => {
+    liveEnabled = true;
+    turnResults.set(0, result(["page-a"], [["page-a", alpha]]));
+    turnResults.set(
+      1,
+      result(
+        ["page-a", "page-c"],
+        [
+          ["page-a", alpha],
+          ["page-c", gamma],
+        ],
+      ),
+    );
+
+    // Turn 0 froze Alpha into history and recorded it resident.
+    await produceSections("conv-1", 0);
+    expect(activeIds("conv-1")).toEqual(new Set(["page-a§Alpha"]));
+    const storeBefore = getInjected("conv-1");
+
+    // Turn 1 is assembled onto a transcript that carries no frozen block,
+    // so Alpha's body renders again beside the net-new Gamma.
+    const block = await produceReplaced("conv-1", 1);
+    expect(block!.text).toContain(
+      "# memory/concepts/page-a.md § Alpha\nalpha section text",
+    );
+    expect(block!.text).toContain(
+      "# memory/concepts/page-c.md § Gamma\ngamma section text",
+    );
+    expect(block!.meta?.[MEMORY_V3_COMMIT_META_KEY]).toBeUndefined();
+    expect(await producePointerReplaced("conv-1", 1)).toBeNull();
+    expect(getInjected("conv-1")).toEqual(storeBefore);
+    expect(activeIds("conv-1")).toEqual(new Set(["page-a§Alpha"]));
+  });
+
+  test("a re-entry of a replaced turn re-emits the same bytes and still carries no commit", async () => {
+    liveEnabled = true;
+    turnResults.set(
+      0,
+      result(
+        ["page-a", "page-c"],
+        [
+          ["page-a", alpha],
+          ["page-c", gamma],
+        ],
+      ),
+    );
+
+    const first = await produceReplaced("conv-1", 0);
+    expect(first!.text).toContain("§ Alpha");
+    const again = await produceReplaced("conv-1", 0);
+    expect(again!.text).toBe(first!.text);
+    expect(again!.meta?.[MEMORY_V3_COMMIT_META_KEY]).toBeUndefined();
+    expect(observeTurnSpy).toHaveBeenCalledTimes(1);
+    expect(activeIds("conv-1")).toEqual(new Set());
+  });
+
+  test("the next turn assembled without a replacement records its sections as usual", async () => {
+    liveEnabled = true;
+    turnResults.set(0, result(["page-a"], [["page-a", alpha]]));
+    turnResults.set(1, result(["page-a"], [["page-a", alpha]]));
+
+    await produceReplaced("conv-1", 0);
+    expect(activeIds("conv-1")).toEqual(new Set());
+
+    const block = await produceSections("conv-1", 1);
+    expect(block!.text).toContain("§ Alpha");
+    expect(activeIds("conv-1")).toEqual(new Set(["page-a§Alpha"]));
+  });
+});

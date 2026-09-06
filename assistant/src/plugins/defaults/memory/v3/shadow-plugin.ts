@@ -43,6 +43,7 @@ import {
   recordLatencySubSpan,
   timeLatencySubSpan,
 } from "../../../../daemon/turn-latency-sub-spans.js";
+import { enqueueMemoryJob } from "../../../../persistence/jobs-store.js";
 import { stripCommentLines } from "../host-utils.js";
 import { getLogger } from "../logging.js";
 import { type MemorySqlite, memorySqliteOrNull } from "../memory-db.js";
@@ -77,7 +78,10 @@ import {
   MemoryV3RetrievalUnavailableError,
   resolveSelectorPrompt,
 } from "./pool-select.js";
-import { ensureSectionCollection } from "./section-dense-store.js";
+import {
+  ensureSectionCollection,
+  holdSectionDenseReadsUntilRebuilt,
+} from "./section-dense-store.js";
 import type { SectionNeedle } from "./section-needle.js";
 import { buildSectionNeedle } from "./section-needle.js";
 import { buildSectionIndex } from "./sections.js";
@@ -411,6 +415,22 @@ async function initLanes(config: AssistantConfig): Promise<ShadowLanes> {
       { err: err instanceof Error ? err.message : String(err) },
       "memory-v3: section collection ensure failed; continuing with the dense lane degraded",
     );
+  }
+  // Dense reads are held while the section store awaits the rebuild a
+  // chunker version change forces (its points' ordinals can name the wrong
+  // section of this index), and the hold's first observation in this
+  // process kicks the maintain job at once instead of waiting out the
+  // six-hour backstop. Best-effort like the ensure above: a failed enqueue
+  // leaves the backstop to run the rebuild, with reads held meanwhile.
+  if (holdSectionDenseReadsUntilRebuilt()) {
+    try {
+      enqueueMemoryJob("memory_v3_maintain", {});
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "memory-v3: failed to enqueue the section rebuild; the maintenance backstop will run it",
+      );
+    }
   }
 
   return {

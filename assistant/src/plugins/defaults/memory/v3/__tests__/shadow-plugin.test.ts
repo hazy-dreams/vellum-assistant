@@ -89,6 +89,9 @@ const realHotSet = { ...(await import("../hot-set.js")) };
 const realLanesVersionStore = {
   ...(await import("../lanes-version-store.js")),
 };
+const realJobsStore = {
+  ...(await import("../../../../../persistence/jobs-store.js")),
+};
 
 let shadowMockActive = false;
 
@@ -180,6 +183,12 @@ let edgeBuilds = 0;
 let learnedGraphBuilds = 0;
 let ensureCollectionCalls = 0;
 let ensureCollectionThrows = false;
+// What the section store's chunker rebuild hold reports at lane init: true
+// mirrors a hold this init started, which the lane answers by enqueuing the
+// rebuild. `enqueuedJobs` records the job types the mocked store enqueued.
+let holdDenseReadsSlot = false;
+let enqueueThrows = false;
+const enqueuedJobs: string[] = [];
 
 // Stable-prefix lane inputs, driven per test: what the curated core file
 // yields and what the frecency hot set computes. `hotSetOpts` captures the
@@ -476,6 +485,26 @@ mock.module("../section-dense-store.js", () => ({
       throw new Error("qdrant unavailable");
     }
   },
+  holdSectionDenseReadsUntilRebuilt: () =>
+    shadowMockActive
+      ? holdDenseReadsSlot
+      : realSectionDenseStore.holdSectionDenseReadsUntilRebuilt(),
+}));
+
+mock.module("../../../../../persistence/jobs-store.js", () => ({
+  ...realJobsStore,
+  enqueueMemoryJob: (
+    ...args: Parameters<typeof realJobsStore.enqueueMemoryJob>
+  ) => {
+    if (!shadowMockActive) {
+      return realJobsStore.enqueueMemoryJob(...args);
+    }
+    if (enqueueThrows) {
+      throw new Error("memory_jobs unavailable");
+    }
+    enqueuedJobs.push(args[0]);
+    return `job-${enqueuedJobs.length}`;
+  },
 }));
 
 mock.module("../orchestrate.js", () => ({
@@ -615,6 +644,9 @@ beforeEach(() => {
   learnedGraphBuilds = 0;
   ensureCollectionCalls = 0;
   ensureCollectionThrows = false;
+  holdDenseReadsSlot = false;
+  enqueueThrows = false;
+  enqueuedJobs.length = 0;
   capturedPageBody = null;
   coreSetSlugs = [];
   hotSetResult = [];
@@ -1464,5 +1496,33 @@ describe("memory-v3 infrastructure-failure handling", () => {
     });
 
     expect(await produce("conv-nonfatal-live", 0)).toBeNull();
+  });
+});
+
+describe("memory-v3 dense read hold at lane init", () => {
+  test("a lane init that starts the hold enqueues the maintain job at once", async () => {
+    holdDenseReadsSlot = true;
+
+    await observeTurn("conv-1", 0);
+
+    expect(enqueuedJobs).toEqual(["memory_v3_maintain"]);
+    expect(orchestrateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a lane init with nothing to rebuild enqueues nothing", async () => {
+    await observeTurn("conv-1", 0);
+
+    expect(enqueuedJobs).toEqual([]);
+  });
+
+  test("a failed enqueue leaves the lanes up; the maintenance backstop runs the rebuild", async () => {
+    holdDenseReadsSlot = true;
+    enqueueThrows = true;
+
+    await observeTurn("conv-1", 0);
+
+    expect(enqueuedJobs).toEqual([]);
+    expect(needleBuilds).toBe(1);
+    expect(orchestrateSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -2299,7 +2299,10 @@ function fallbackTurnTrust(
  *     tail. When replacement fires, re-prepend any memory-prefix blocks
  *     that `graphMemory.prepareMemory` had attached to the original tail —
  *     the Slack transcript is rendered fresh from persisted rows and
- *     carries no memory prefix of its own.
+ *     carries no memory prefix of its own. The chain is told ahead of time
+ *     that the replacement will fire (`replacesRunMessages` on the turn
+ *     context, resolved with the transcript in step 1), and the memory-v3
+ *     block then attaches to the replaced tail in memory only (step 4).
  *  4. Apply the chain's `"after-memory-prefix"` blocks in ascending
  *     `order`. This runs BEFORE step 5's hardcoded prepends so the
  *     memory-prefix counter sees only the memory blocks on the tail —
@@ -2453,6 +2456,16 @@ export async function applyRuntimeInjections(
           liveConversation?.slackContextCompactionWatermarkTs,
       })
     : null;
+  // The `slack-messages` injector replaces the run messages with that
+  // transcript whenever it has at least one entry. Stated on the turn
+  // context ahead of the chain (the transcript is loaded here, before any
+  // injector runs) so an injector whose output depends on what history
+  // carries renders for the transcript rather than for `runMessages`: the
+  // transcript is rendered from raw persisted content, so the frozen memory
+  // blocks that live in message metadata never reach it.
+  const replacesRunMessages =
+    slackChronologicalMessages !== null &&
+    slackChronologicalMessages.length > 0;
 
   // Assemble the per-turn TurnContext handed to the injector chain. The
   // turn-identity fields come from `options` when supplied; `requestId` is the
@@ -2467,6 +2480,7 @@ export async function applyRuntimeInjections(
     channelCapabilities,
     slackChronologicalMessages,
     slackActiveThreadFocusBlock,
+    replacesRunMessages,
     isNonInteractive: options.isNonInteractive,
     isBackgroundConversation,
     activeDocuments,
@@ -2664,7 +2678,9 @@ export async function applyRuntimeInjections(
   let result = runMessagesForAssembly;
 
   // ── Step 1: Slack chronological replacement (chain "replace" block) ──
+  let historyReplaced = false;
   if (replaceBlock && replaceBlock.messagesOverride) {
+    historyReplaced = true;
     // `graphMemory.prepareMemory` prepends a `<memory __injected>` block
     // (and any memory-image groups) to the last user message before
     // runtime assembly runs. The Slack transcript is freshly rendered
@@ -2718,8 +2734,13 @@ export async function applyRuntimeInjections(
   // net-new onto its own message and the newest-copy rule retires this
   // copy. A re-injection assembly (`options.reinjection`) never commits:
   // its block is never persisted, so the store must not claim sections
-  // whose only copy vanishes on restart. An empty-text block (all-repeat
-  // turn) attaches nothing and captures nothing.
+  // whose only copy vanishes on restart. A replaced history (Step 1) takes
+  // the same in-memory-only shape: the transcript is rendered from
+  // persisted rows, so a block captured here would never reach a later
+  // prompt, and the injector rendered every selection afresh for the
+  // replacement (`replacesRunMessages` on the turn context) and attached
+  // no commit. An empty-text block (all-repeat turn) attaches nothing and
+  // captures nothing.
   for (const block of afterMemory) {
     if (block.id !== MEMORY_V3_BLOCK_ID) {
       result = applyInjectionBlock(result, block);
@@ -2727,6 +2748,10 @@ export async function applyRuntimeInjections(
     }
     const tail = result[result.length - 1];
     if (!tail || tail.role !== "user") {
+      continue;
+    }
+    if (historyReplaced) {
+      result = applyInjectionBlock(result, block);
       continue;
     }
     if (block.text.length > 0) {

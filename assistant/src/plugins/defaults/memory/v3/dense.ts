@@ -22,6 +22,7 @@ import { getLogger } from "../logging.js";
 import {
   getSectionDenseClient,
   SECTION_COLLECTION,
+  sectionDenseReadsHeld,
 } from "./section-dense-store.js";
 import type { Slug } from "./types.js";
 
@@ -61,6 +62,9 @@ export interface DenseHitScored {
  * the committed collection dimension (degraded backend or dimension mismatch) —
  * so a 3072-dim collection committed while only a 384-dim backend is reachable
  * narrows recall cleanly rather than failing the dimension assertion every turn.
+ * Also `[]` while the section store awaits its chunker rebuild
+ * (`sectionDenseReadsHeld`): the stored points' ordinals can name the wrong
+ * section of the current index, and no hit beats a stale one.
  */
 export async function denseLaneScored(
   config: AssistantConfig,
@@ -68,6 +72,9 @@ export async function denseLaneScored(
   k: number,
 ): Promise<DenseHitScored[]> {
   if (k <= 0) {
+    return [];
+  }
+  if (sectionDenseReadsHeld()) {
     return [];
   }
 

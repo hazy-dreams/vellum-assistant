@@ -197,6 +197,13 @@ identity (`markV3LiveBlock` / `isV3LiveBlock` in `v3/types.ts`: the blocks
 assembly attaches, `loadFromDb` splices, and the strip rewrites), never by
 text, so a pre-cutover v2 block byte-identical to a v3 entry is left alone. Re-selected sections that are already resident are listed, paths
 only, in the `memory-v3-pointer` injector's per-turn `<memory_pointer>` block.
+Under a run-messages replacement (the Slack chronological transcript,
+`TurnContext.replacesRunMessages`, stated by runtime assembly ahead of the
+chain) no frozen block from an earlier turn is in the prompt, so the sections
+injector renders every selection afresh, the pointer injector emits nothing,
+and assembly attaches the block to the transcript's tail in memory only,
+uncaptured and uncommitted: the store claims nothing and the valve is not
+scheduled.
 Each turn's pointer stays on the user message that was sent with it (persisted
 under `memoryV3PointerBlock` and rehydrated on load, like the frozen sections);
 a fresh one is spliced only onto the new tail, and assembly tail-strips a
@@ -472,10 +479,18 @@ failure record and the section re-embed high-water:
 - `memory_v3_maintain:section_chunker_version`
   (`v3/section-dense-store.ts`'s `SECTION_CHUNKER_VERSION_KEY`, current value
   `SECTION_CHUNKER_VERSION`): the chunker version the stored section vectors
-  were built with. `ensureSectionChunkerVersion` (run by the maintain job and
-  the backfill before an embed pass) clears the high-water above on a
-  mismatch so the collection is rebuilt from every page, since point ids and
-  dense hits key on `(article, ordinal)`
+  were built with. `ensureSectionChunkerVersion` (run at dense lane init and
+  by the maintain job and the backfill before an embed pass) clears the
+  high-water above on a mismatch so the collection is rebuilt from every
+  page, since point ids and dense hits key on `(article, ordinal)`
+- `memory_v3_maintain:section_rebuild_pending`
+  (`v3/section-dense-store.ts`'s `SECTION_REBUILD_PENDING_KEY`): set beside
+  that high-water reset and cleared by `commitSectionEmbedHighWater`, the
+  commit that ends a zero-failure re-embed pass (the maintain job's and the
+  backfill's). While it is set the dense lane serves no hits
+  (`holdSectionDenseReadsUntilRebuilt` at lane init, `sectionDenseReadsHeld`
+  on every dense read), and the lane init that first observes it enqueues
+  `memory_v3_maintain` at once instead of waiting out the cadence key
 - v1: `graph_maintenance:{decay,consolidate,pattern_scan,narrative}:last_run`,
   `pkb_filing_last_run`, `pkb_compaction_last_run`,
   `graph_bootstrap:*`, `memory:backfill:*`

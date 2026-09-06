@@ -979,3 +979,31 @@ describe("matched-section reconstruction", () => {
     );
   });
 });
+
+describe("selection reads after a failed section_key ensure", () => {
+  test("a selections table whose column ensure failed reads as no v3 diagnostic rather than an error", async () => {
+    // A memory database created before the column existed, on storage the
+    // ALTER cannot reach: the ensure fails open, so every read that names
+    // `section_key` throws, and the inspector must see no v3 diagnostic
+    // instead of a failed route.
+    memorySqlite = new Database(":memory:");
+    ensureMemoryV3SelectionsSchema(memorySqlite);
+    memorySqlite
+      .query(
+        `INSERT INTO memory_v3_selections
+           (conversation_id, turn, slug, source, created_at, message_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("conv-ro", 0, "domain-a/page-1", "needle", 1000, "msg-ro-1");
+    memorySqlite.exec("PRAGMA query_only = ON");
+
+    await expect(
+      getMemoryV3SelectionForInspectorByMessageIds(["msg-ro-1"]),
+    ).resolves.toBeNull();
+    await expect(
+      getMemoryV3SelectionForInspector("conv-ro", 0),
+    ).resolves.toBeNull();
+    // A read that names no `section_key` still serves.
+    expect(summarizeSelections("conv-ro").turns).toBe(1);
+  });
+});

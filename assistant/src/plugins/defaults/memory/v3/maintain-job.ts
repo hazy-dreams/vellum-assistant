@@ -65,10 +65,7 @@ import {
 
 import { isMemoryV3Live } from "../../../../config/memory-v3-gate.js";
 import type { AssistantConfig } from "../../../../config/types.js";
-import {
-  getMemoryCheckpoint,
-  setMemoryCheckpoint,
-} from "../../../../persistence/checkpoints.js";
+import { getMemoryCheckpoint } from "../../../../persistence/checkpoints.js";
 import { EmbeddingBackendUnavailableError } from "../../../../persistence/embeddings/embedding-backend.js";
 import { EmbeddingBillingBlockError } from "../../../../persistence/embeddings/embedding-billing-breaker.js";
 import type { MemoryJob } from "../../../../persistence/jobs-store.js";
@@ -82,6 +79,7 @@ import { skillSlugFor } from "../substrate/skill-store.js";
 import { capabilityOrDiskBody, isCapabilitySlug } from "./capabilities.js";
 import { loadCoreSet as realLoadCoreSet } from "./core-set.js";
 import {
+  commitSectionEmbedHighWater,
   deleteSectionsForArticle as realDeleteSectionsForArticle,
   ensureSectionChunkerVersion as realEnsureSectionChunkerVersion,
   ensureSectionCollection as realEnsureSectionCollection,
@@ -147,6 +145,8 @@ export interface MaintainJobDeps {
    * Persist the high-water mark after a re-embed pass with zero failures. The
    * value is captured before the pass's writes (see the key docstring); the
    * caller skips this when any page failed so failed pages retry next pass.
+   * The real commit (`commitSectionEmbedHighWater`) also releases the dense
+   * read hold a forced chunker rebuild put in place.
    */
   commitEmbedHighWater: (highWaterMs: number) => void;
   /**
@@ -222,6 +222,8 @@ export interface BackfillJobDeps {
   /**
    * Persist the high-water mark after the backfill completes with zero
    * failures. Skipped when any page failed so failed pages retry next pass.
+   * The real commit (`commitSectionEmbedHighWater`) also releases the dense
+   * read hold a forced chunker rebuild put in place.
    */
   commitEmbedHighWater: (highWaterMs: number) => void;
   /**
@@ -348,10 +350,6 @@ async function selectChangedPagesFromWorkspace(
   return computeChangedPages(index.entries, readEmbedHighWater());
 }
 
-function commitEmbedHighWater(highWaterMs: number): void {
-  setMemoryCheckpoint(MAINTAIN_EMBED_HIGH_WATER_KEY, String(highWaterMs));
-}
-
 /** Read a page's frontmatter-stripped body; missing/failed reads degrade to "". */
 async function readPageBodyFromWorkspace(
   workspaceDir: string,
@@ -400,7 +398,7 @@ function defaultDeps(config: AssistantConfig): MaintainJobDeps {
       backfillPageBodyFromWorkspace(workspaceDir, slug),
     deleteSectionsForArticle: realDeleteSectionsForArticle,
     upsertSections: realUpsertSections,
-    commitEmbedHighWater,
+    commitEmbedHighWater: commitSectionEmbedHighWater,
     ensureChunkerVersion: realEnsureSectionChunkerVersion,
     listSectionArticles: () => realListSectionArticles(config),
     listIndexedSlugs: () => selectAllPagesFromWorkspace(workspaceDir),
@@ -435,7 +433,7 @@ function defaultBackfillDeps(config: AssistantConfig): BackfillJobDeps {
     readPageBody: (slug) => backfillPageBodyFromWorkspace(workspaceDir, slug),
     deleteSectionsForArticle: realDeleteSectionsForArticle,
     upsertSections: realUpsertSections,
-    commitEmbedHighWater,
+    commitEmbedHighWater: commitSectionEmbedHighWater,
     ensureChunkerVersion: realEnsureSectionChunkerVersion,
     nowMs: () => Date.now(),
     config,

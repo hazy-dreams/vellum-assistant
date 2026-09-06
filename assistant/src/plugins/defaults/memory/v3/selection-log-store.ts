@@ -29,7 +29,8 @@ import type { MemoryV3SelectionLog } from "../../../../api/responses/memory-v3-s
 import { getConfig } from "../../../../config/loader.js";
 import { isMemoryV3Live } from "../../../../config/memory-v3-gate.js";
 import { getDb, getSqliteFrom } from "../../../../persistence/db-connection.js";
-import { memorySqliteOrNull } from "../memory-db.js";
+import { getLogger } from "../logging.js";
+import { type MemorySqlite, memorySqliteOrNull } from "../memory-db.js";
 import { wrapMemoryBlock } from "../memory-marker.js";
 import { getWorkspaceDir } from "../paths.js";
 import { readPage } from "../substrate/page-store.js";
@@ -66,53 +67,79 @@ interface SelectionRow {
 
 const SELECTION_COLUMNS = `conversation_id, turn, slug, source, section_ordinal, section_title, section_key`;
 
-/** The memory connection with the selection log's plugin-owned
- *  `section_key` column ensured on the connection's first use in this
- *  process (`plugin-schema.ts`); `null` when the connection is unavailable. */
-function selectionsDb(context: string): ReturnType<typeof memorySqliteOrNull> {
-  const raw = memorySqliteOrNull(context);
-  if (raw) {
-    ensureMemoryV3SelectionsSectionKeyOnce(raw);
-  }
-  return raw;
-}
+const log = getLogger("memory-v3-selection-log-store");
 
-function rowsForTurn(conversationId: string, turn: number): SelectionRow[] {
-  const raw = selectionsDb("rowsForTurn");
+let readFailureWarned = false;
+
+/**
+ * Run a selection-log read against the memory connection, its plugin-owned
+ * `section_key` column ensured on the connection's first use in this process
+ * (`plugin-schema.ts`), degrading to no rows when the connection is
+ * unavailable or the statement fails. The ensure is fail-open, so on a
+ * database whose ALTER failed (a schema lock, read-only storage) the column
+ * is missing and the read throws; the inspector then shows no v3 diagnostic
+ * rather than failing its route. Warns once per process.
+ */
+function readSelectionRows(
+  context: string,
+  read: (raw: MemorySqlite) => SelectionRow[],
+): SelectionRow[] {
+  const raw = memorySqliteOrNull(context);
   if (!raw) {
     return [];
   }
-  return raw
-    .query(
-      /*sql*/ `
-      SELECT ${SELECTION_COLUMNS} FROM memory_v3_selections
-      WHERE conversation_id = ? AND turn = ?
-      ORDER BY rowid
-    `,
-    )
-    .all(conversationId, turn) as SelectionRow[];
+  ensureMemoryV3SelectionsSectionKeyOnce(raw);
+  try {
+    return read(raw);
+  } catch (err) {
+    if (!readFailureWarned) {
+      readFailureWarned = true;
+      log.warn(
+        { err, context },
+        "memory-v3 selection read failed; the inspector shows no v3 selection",
+      );
+    }
+    return [];
+  }
+}
+
+function rowsForTurn(conversationId: string, turn: number): SelectionRow[] {
+  return readSelectionRows(
+    "rowsForTurn",
+    (raw) =>
+      raw
+        .query(
+          /*sql*/ `
+          SELECT ${SELECTION_COLUMNS} FROM memory_v3_selections
+          WHERE conversation_id = ? AND turn = ?
+          ORDER BY rowid
+        `,
+        )
+        .all(conversationId, turn) as SelectionRow[],
+  );
 }
 
 /** The selection rows stamped with any of the given message ids, or `null`
- *  when there are none (including when the memory connection is unavailable). */
+ *  when there are none (including when the memory connection is unavailable
+ *  or the read degraded). */
 function rowsForMessageIds(messageIds: string[]): SelectionRow[] | null {
   if (messageIds.length === 0) {
     return null;
   }
-  const raw = selectionsDb("rowsForMessageIds");
-  if (!raw) {
-    return null;
-  }
   const placeholders = messageIds.map(() => "?").join(", ");
-  const rows = raw
-    .query(
-      /*sql*/ `
-      SELECT ${SELECTION_COLUMNS} FROM memory_v3_selections
-      WHERE message_id IN (${placeholders})
-      ORDER BY rowid
-    `,
-    )
-    .all(...messageIds) as SelectionRow[];
+  const rows = readSelectionRows(
+    "rowsForMessageIds",
+    (raw) =>
+      raw
+        .query(
+          /*sql*/ `
+          SELECT ${SELECTION_COLUMNS} FROM memory_v3_selections
+          WHERE message_id IN (${placeholders})
+          ORDER BY rowid
+        `,
+        )
+        .all(...messageIds) as SelectionRow[],
+  );
   return rows.length > 0 ? rows : null;
 }
 

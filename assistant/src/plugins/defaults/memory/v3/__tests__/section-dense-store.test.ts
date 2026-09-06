@@ -240,10 +240,12 @@ const {
   deleteSectionsForArticle,
   listSectionArticles,
   SECTION_COLLECTION,
+  commitSectionEmbedHighWater,
   ensureSectionChunkerVersion,
   MAINTAIN_EMBED_HIGH_WATER_KEY,
   SECTION_CHUNKER_VERSION,
   SECTION_CHUNKER_VERSION_KEY,
+  SECTION_REBUILD_PENDING_KEY,
   _resetSectionDenseStoreForTests,
 } = await import("../section-dense-store.js");
 
@@ -822,5 +824,30 @@ describe("memory v3 section-dense-store: chunker version guard", () => {
     expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
       String(SECTION_CHUNKER_VERSION),
     );
+  });
+
+  test("a forced rebuild marks the rebuild pending; committing the pass's high-water clears the marker", () => {
+    reset();
+    checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
+
+    expect(ensureSectionChunkerVersion()).toBe(true);
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+
+    commitSectionEmbedHighWater(1700000002000);
+    expect(checkpointState.values.get(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
+      "1700000002000",
+    );
+    expect(checkpointState.values.has(SECTION_REBUILD_PENDING_KEY)).toBe(false);
+    expect(checkpointState.deletes).toEqual([
+      MAINTAIN_EMBED_HIGH_WATER_KEY,
+      SECTION_REBUILD_PENDING_KEY,
+    ]);
+  });
+
+  test("a fresh install's version record marks nothing pending", () => {
+    reset();
+    expect(ensureSectionChunkerVersion()).toBe(false);
+    expect(checkpointState.values.has(SECTION_REBUILD_PENDING_KEY)).toBe(false);
   });
 });
