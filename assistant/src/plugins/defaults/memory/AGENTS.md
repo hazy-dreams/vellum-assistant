@@ -482,15 +482,24 @@ failure record and the section re-embed high-water:
   were built with. `ensureSectionChunkerVersion` (run at dense lane init and
   by the maintain job and the backfill before an embed pass) clears the
   high-water above on a mismatch so the collection is rebuilt from every
-  page, since point ids and dense hits key on `(article, ordinal)`
+  page, since point ids and dense hits key on `(article, ordinal)`. A store
+  with no version on record counts as stale, not fresh, when a high-water or
+  the pending marker below is on record or the collection already holds
+  points; only an empty collection records the version with nothing to
+  rebuild
 - `memory_v3_maintain:section_rebuild_pending`
-  (`v3/section-dense-store.ts`'s `SECTION_REBUILD_PENDING_KEY`): set beside
-  that high-water reset and cleared by `commitSectionEmbedHighWater`, the
-  commit that ends a zero-failure re-embed pass (the maintain job's and the
-  backfill's). While it is set the dense lane serves no hits
-  (`holdSectionDenseReadsUntilRebuilt` at lane init, `sectionDenseReadsHeld`
-  on every dense read), and the lane init that first observes it enqueues
-  `memory_v3_maintain` at once instead of waiting out the cadence key
+  (`v3/section-dense-store.ts`'s `SECTION_REBUILD_PENDING_KEY`): written
+  before that high-water reset (the marker is the only signal that survives
+  the reset, so an interruption between the two writes leaves the hold in
+  place and the next check finishes the transition) and cleared by
+  `commitSectionEmbedHighWater`, the commit that ends a zero-failure re-embed
+  pass (the maintain job's and the backfill's). While it is set the dense lane
+  serves no hits (`holdSectionDenseReadsUntilRebuilt` at lane init,
+  `sectionDenseReadsHeld` on every dense read), the lane init that first
+  observes it enqueues `memory_v3_maintain` at once instead of waiting out the
+  cadence key, and the maintain pass it names re-embeds every capability row
+  the store holds (the change delta never names one) before its commit clears
+  the marker
 - v1: `graph_maintenance:{decay,consolidate,pattern_scan,narrative}:last_run`,
   `pkb_filing_last_run`, `pkb_compaction_last_run`,
   `graph_bootstrap:*`, `memory:backfill:*`

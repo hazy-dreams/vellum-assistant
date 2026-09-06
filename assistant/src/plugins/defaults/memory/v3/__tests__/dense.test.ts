@@ -67,6 +67,9 @@ const state = {
     query: unknown;
     limit: number;
   }>,
+  // Whether the collection holds any point, as the chunker version check's
+  // `scroll` probe sees it (independent of the programmed query hits).
+  collectionHasPoints: false,
 };
 
 class MockQdrantClient {
@@ -81,6 +84,12 @@ class MockQdrantClient {
       throw state.queryThrows;
     }
     return { points: state.points };
+  }
+  async scroll(_name: string, _params: { limit: number }) {
+    return {
+      points: state.collectionHasPoints ? [{ id: "1", payload: {} }] : [],
+      next_page_offset: null,
+    };
   }
 }
 
@@ -143,6 +152,7 @@ function resetState(): void {
   state.points = [];
   state.queryThrows = null;
   state.queryCalls.length = 0;
+  state.collectionHasPoints = false;
   _resetSectionDenseStoreForTests();
 }
 
@@ -366,7 +376,7 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
     checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
     checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
 
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
     // The reset that forces the rebuild, the marker that outlives a restart,
     // and the version now on record.
     expect(checkpointState.values.has(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
@@ -377,7 +387,7 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
       String(SECTION_CHUNKER_VERSION),
     );
     // Already held: a later lane init in this process starts nothing new.
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(false);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(false);
 
     // Held: no hits, and no embed or search either.
     expect(await denseLane(CONFIG, "query", 5)).toEqual([]);
@@ -403,7 +413,7 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
     );
     checkpointState.values.set(SECTION_REBUILD_PENDING_KEY, "1");
 
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
     expect(await denseLane(CONFIG, "query", 5)).toEqual([]);
 
     // The memory worker's pass completed: its commit cleared the marker.
@@ -419,7 +429,7 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
     );
     checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
 
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(false);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(false);
     expect(checkpointState.values.get(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
       "1700000000000",
     );
@@ -427,10 +437,10 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
     expect(await denseLane(CONFIG, "query", 5)).toEqual(HIT);
   });
 
-  test("a fresh install (no high-water) records the version without a hold", async () => {
+  test("a fresh install (no high-water, empty collection) records the version without a hold", async () => {
     state.points = [point("page-a", 0, 0.9)];
 
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(false);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(false);
     expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
       String(SECTION_CHUNKER_VERSION),
     );
@@ -438,11 +448,29 @@ describe("memory v3 dense lane: chunker rebuild hold", () => {
     expect(await denseLane(CONFIG, "query", 5)).toEqual(HIT);
   });
 
+  test("a version-less install whose collection already holds points is held and forced to rebuild", async () => {
+    state.points = [point("page-a", 0, 0.9)];
+    state.collectionHasPoints = true;
+
+    // No version, no high-water, no marker, yet points in the collection: an
+    // install whose passes never committed cleanly. Its points were built by
+    // another chunker, so it is stale, not fresh.
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+    expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
+      String(SECTION_CHUNKER_VERSION),
+    );
+    expect(await denseLane(CONFIG, "query", 5)).toEqual([]);
+
+    commitSectionEmbedHighWater(1700000002000);
+    expect(await denseLane(CONFIG, "query", 5)).toEqual(HIT);
+  });
+
   test("a checkpoint ledger that cannot be read leaves reads open", async () => {
     state.points = [point("page-a", 0, 0.9)];
     checkpointState.throws = new Error("no such table: memory_checkpoints");
 
-    expect(holdSectionDenseReadsUntilRebuilt()).toBe(false);
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(false);
     expect(await denseLane(CONFIG, "query", 5)).toEqual(HIT);
   });
 });

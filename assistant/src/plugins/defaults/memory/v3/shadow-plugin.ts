@@ -422,7 +422,7 @@ async function initLanes(config: AssistantConfig): Promise<ShadowLanes> {
   // process kicks the maintain job at once instead of waiting out the
   // six-hour backstop. Best-effort like the ensure above: a failed enqueue
   // leaves the backstop to run the rebuild, with reads held meanwhile.
-  if (holdSectionDenseReadsUntilRebuilt()) {
+  if (await holdSectionDenseReadsUntilRebuilt()) {
     try {
       enqueueMemoryJob("memory_v3_maintain", {});
     } catch (err) {

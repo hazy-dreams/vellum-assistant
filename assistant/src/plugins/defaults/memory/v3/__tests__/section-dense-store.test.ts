@@ -159,6 +159,7 @@ const state = {
   // Programmed `scroll` pages, consumed in order; each `scroll` call shifts one.
   scrollPages: [] as ScrollPage[],
   scrollCalls: [] as Array<{ limit: number; offset: unknown }>,
+  scrollThrows: null as Error | null,
 };
 
 class MockQdrantClient {
@@ -208,6 +209,9 @@ class MockQdrantClient {
     params: { limit: number; offset?: unknown },
   ): Promise<ScrollPage> {
     state.scrollCalls.push({ limit: params.limit, offset: params.offset });
+    if (state.scrollThrows) {
+      throw state.scrollThrows;
+    }
     return state.scrollPages.shift() ?? { points: [], next_page_offset: null };
   }
 }
@@ -219,17 +223,22 @@ mock.module("@qdrant/js-client-rest", () => ({
 // Records the checkpoint clears `ensureSectionCollection` performs when it
 // (re)creates an empty collection, so tests can assert the embed high-water is
 // reset (which sends the next maintain pass down its full-corpus re-embed path).
+// `ops` is the write log in order (`set:<key>` / `delete:<key>`), so the
+// chunker-version tests can assert which write lands first.
 const checkpointState = {
   deletes: [] as string[],
+  ops: [] as string[],
   values: new Map<string, string>(),
 };
 mock.module("../../../../../persistence/checkpoints.js", () => ({
   getMemoryCheckpoint: (key: string) => checkpointState.values.get(key) ?? null,
   setMemoryCheckpoint: (key: string, value: string) => {
+    checkpointState.ops.push(`set:${key}`);
     checkpointState.values.set(key, value);
   },
   deleteMemoryCheckpoint: (key: string) => {
     checkpointState.deletes.push(key);
+    checkpointState.ops.push(`delete:${key}`);
     checkpointState.values.delete(key);
   },
 }));
@@ -242,6 +251,8 @@ const {
   SECTION_COLLECTION,
   commitSectionEmbedHighWater,
   ensureSectionChunkerVersion,
+  holdSectionDenseReadsUntilRebuilt,
+  sectionDenseReadsHeld,
   MAINTAIN_EMBED_HIGH_WATER_KEY,
   SECTION_CHUNKER_VERSION,
   SECTION_CHUNKER_VERSION_KEY,
@@ -277,6 +288,7 @@ function resetState(): void {
   state.deleteCollectionCalls.length = 0;
   state.scrollPages.length = 0;
   state.scrollCalls.length = 0;
+  state.scrollThrows = null;
   embedState.calls.length = 0;
   embedState.dim = 4;
   embedState.statusProvider = "local";
@@ -288,6 +300,7 @@ function resetState(): void {
   cacheState.store.clear();
   cacheState.reads.length = 0;
   checkpointState.deletes.length = 0;
+  checkpointState.ops.length = 0;
   _resetSectionDenseStoreForTests();
 }
 
@@ -773,65 +786,88 @@ describe("memory v3 section-dense-store — listSectionArticles", () => {
 
 describe("memory v3 section-dense-store: chunker version guard", () => {
   const reset = () => {
-    checkpointState.deletes.length = 0;
+    resetState();
     checkpointState.values.clear();
+    checkpointState.ops.length = 0;
   };
+  const HIGH_WATER = "1700000000000";
+  const STORED_POINT = { id: "1", payload: { article: "page-a" } };
+  const PROBE = [{ limit: 1, offset: undefined }];
 
-  test("a recorded older version clears the embed high-water exactly once and records the current version", () => {
+  test("a recorded older version marks the rebuild pending before it clears the high-water, then records the version", async () => {
     reset();
     checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
-    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, HIGH_WATER);
 
-    expect(ensureSectionChunkerVersion()).toBe(true);
-    expect(checkpointState.deletes).toEqual([MAINTAIN_EMBED_HIGH_WATER_KEY]);
+    expect(await ensureSectionChunkerVersion()).toBe(true);
+    // The marker is the only signal that survives the reset, so it lands first.
+    expect(checkpointState.ops).toEqual([
+      `set:${SECTION_REBUILD_PENDING_KEY}`,
+      `delete:${MAINTAIN_EMBED_HIGH_WATER_KEY}`,
+      `set:${SECTION_CHUNKER_VERSION_KEY}`,
+    ]);
     expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
       String(SECTION_CHUNKER_VERSION),
     );
-    // The next pass sees the recorded version and leaves everything alone.
+    // A recorded high-water already says "stale": the collection is not probed.
+    expect(state.scrollCalls).toEqual([]);
+
+    // A later check sees the recorded version, writes nothing, and keeps
+    // reporting the rebuild pending until a clean pass commits.
     checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000001000");
-    expect(ensureSectionChunkerVersion()).toBe(false);
-    expect(checkpointState.deletes).toEqual([MAINTAIN_EMBED_HIGH_WATER_KEY]);
+    checkpointState.ops.length = 0;
+    expect(await ensureSectionChunkerVersion()).toBe(true);
+    expect(checkpointState.ops).toEqual([]);
     expect(checkpointState.values.get(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
       "1700000001000",
     );
+    commitSectionEmbedHighWater(1700000002000);
+    expect(await ensureSectionChunkerVersion()).toBe(false);
   });
 
-  test("an install that predates the version key (high-water present, no version) rebuilds once", () => {
+  test("an install that predates the version key (high-water present, no version) rebuilds once", async () => {
     reset();
-    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, HIGH_WATER);
 
-    expect(ensureSectionChunkerVersion()).toBe(true);
+    expect(await ensureSectionChunkerVersion()).toBe(true);
     expect(checkpointState.deletes).toEqual([MAINTAIN_EMBED_HIGH_WATER_KEY]);
     expect(checkpointState.values.has(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
       false,
     );
-    expect(ensureSectionChunkerVersion()).toBe(false);
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+    // Pending until the rebuild pass commits; a second check forces nothing new.
+    expect(await ensureSectionChunkerVersion()).toBe(true);
+    expect(checkpointState.deletes).toEqual([MAINTAIN_EMBED_HIGH_WATER_KEY]);
+    commitSectionEmbedHighWater(1700000002000);
+    expect(await ensureSectionChunkerVersion()).toBe(false);
   });
 
-  test("a matching version does nothing; a fresh install records the version without a rebuild", () => {
+  test("a matching version writes nothing; a fresh install (empty collection) records the version without a rebuild", async () => {
     reset();
     checkpointState.values.set(
       SECTION_CHUNKER_VERSION_KEY,
       String(SECTION_CHUNKER_VERSION),
     );
-    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
-    expect(ensureSectionChunkerVersion()).toBe(false);
-    expect(checkpointState.deletes).toEqual([]);
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, HIGH_WATER);
+    expect(await ensureSectionChunkerVersion()).toBe(false);
+    expect(checkpointState.ops).toEqual([]);
+    expect(state.scrollCalls).toEqual([]);
 
     reset();
-    expect(ensureSectionChunkerVersion()).toBe(false);
-    expect(checkpointState.deletes).toEqual([]);
-    expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
-      String(SECTION_CHUNKER_VERSION),
-    );
+    // No version, no high-water, no marker: the collection decides, and an
+    // empty one is a fresh install.
+    expect(await ensureSectionChunkerVersion()).toBe(false);
+    expect(state.scrollCalls).toEqual(PROBE);
+    expect(checkpointState.ops).toEqual([`set:${SECTION_CHUNKER_VERSION_KEY}`]);
+    expect(checkpointState.values.has(SECTION_REBUILD_PENDING_KEY)).toBe(false);
   });
 
-  test("a forced rebuild marks the rebuild pending; committing the pass's high-water clears the marker", () => {
+  test("a forced rebuild marks the rebuild pending; committing the pass's high-water clears the marker", async () => {
     reset();
     checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
-    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, "1700000000000");
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, HIGH_WATER);
 
-    expect(ensureSectionChunkerVersion()).toBe(true);
+    expect(await ensureSectionChunkerVersion()).toBe(true);
     expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
 
     commitSectionEmbedHighWater(1700000002000);
@@ -845,9 +881,74 @@ describe("memory v3 section-dense-store: chunker version guard", () => {
     ]);
   });
 
-  test("a fresh install's version record marks nothing pending", () => {
+  test("a transition interrupted after the marker (high-water still present, version unrecorded) is finished by the next process with the hold on", async () => {
     reset();
-    expect(ensureSectionChunkerVersion()).toBe(false);
+    // The state a crash between the two transition writes leaves behind.
+    checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
+    checkpointState.values.set(SECTION_REBUILD_PENDING_KEY, "1");
+    checkpointState.values.set(MAINTAIN_EMBED_HIGH_WATER_KEY, HIGH_WATER);
+
+    // The fresh process holds reads and forces the rebuild: the high-water is
+    // gone, the marker stays, the version is now on record.
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(sectionDenseReadsHeld()).toBe(true);
+    expect(checkpointState.values.has(MAINTAIN_EMBED_HIGH_WATER_KEY)).toBe(
+      false,
+    );
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+    expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
+      String(SECTION_CHUNKER_VERSION),
+    );
+  });
+
+  test("a transition interrupted after the reset (marker set, high-water absent, version unrecorded) keeps the hold without probing the collection", async () => {
+    reset();
+    checkpointState.values.set(SECTION_CHUNKER_VERSION_KEY, "1");
+    checkpointState.values.set(SECTION_REBUILD_PENDING_KEY, "1");
+
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(state.scrollCalls).toEqual([]);
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+    expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
+      String(SECTION_CHUNKER_VERSION),
+    );
+  });
+
+  test("a version-less store with no high-water or marker but points in the collection is stale, not fresh", async () => {
+    reset();
+    // No version, no high-water, no marker, yet points in the collection: an
+    // install whose passes never committed cleanly. Nothing on the ledger
+    // says "stale", so the collection probe has to.
+    state.scrollPages = [{ points: [STORED_POINT], next_page_offset: null }];
+
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(true);
+    expect(sectionDenseReadsHeld()).toBe(true);
+    expect(state.scrollCalls).toEqual(PROBE);
+    expect(checkpointState.values.get(SECTION_REBUILD_PENDING_KEY)).toBe("1");
+    expect(checkpointState.values.get(SECTION_CHUNKER_VERSION_KEY)).toBe(
+      String(SECTION_CHUNKER_VERSION),
+    );
+    // The rebuild pass's commit releases the hold as usual.
+    commitSectionEmbedHighWater(1700000002000);
+    expect(sectionDenseReadsHeld()).toBe(false);
+    expect(await ensureSectionChunkerVersion()).toBe(false);
+  });
+
+  test("a collection probe that fails leaves reads open and the version unrecorded, so the check is retried", async () => {
+    reset();
+    state.scrollThrows = new Error("qdrant unreachable");
+
+    expect(await holdSectionDenseReadsUntilRebuilt()).toBe(false);
+    expect(sectionDenseReadsHeld()).toBe(false);
+    expect(checkpointState.ops).toEqual([]);
+    await expect(ensureSectionChunkerVersion()).rejects.toThrow(
+      "qdrant unreachable",
+    );
+  });
+
+  test("a fresh install's version record marks nothing pending", async () => {
+    reset();
+    expect(await ensureSectionChunkerVersion()).toBe(false);
     expect(checkpointState.values.has(SECTION_REBUILD_PENDING_KEY)).toBe(false);
   });
 });

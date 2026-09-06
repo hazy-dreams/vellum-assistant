@@ -4,24 +4,30 @@
  * A flag-gated, best-effort self-maintenance pass over the v3 section dense
  * store and the in-memory lanes. It runs six independent stages, in order:
  *
- *   1. **Section re-embed** — diff the page index by `modifiedAt` against the
+ *   1. **Section re-embed**: diff the page index by `modifiedAt` against the
  *      last successful pass (the high-water mark below), and for every page that
  *      is new or edited since then, re-chunk it into sections
  *      (`buildSectionIndex`) and refresh its dense points
  *      (`deleteSectionsForArticle` + `upsertSections`). This keeps the
  *      section-grain Qdrant collection in sync with on-disk page edits so the
- *      dense lane retrieves against current content. The high-water mark is
- *      advanced only after the pass completes with zero page failures (and is
- *      captured before any potential mtime bumps) so a page is not re-embedded
- *      forever, yet a page whose embed failed (and whose sections were therefore
- *      left deleted) stays above the mark and is retried next pass.
- *   2. **Capability reconcile** — embed capability rows (synthetic skill/CLI
+ *      dense lane retrieves against current content. When the chunker version
+ *      check (`ensureSectionChunkerVersion`) reports a rebuild pending, the
+ *      pass also re-embeds every capability row the store already holds (the
+ *      delta never names one), so every stored point carries the current
+ *      chunk boundaries before the commit releases the dense-read hold. The
+ *      high-water mark is advanced only after the pass completes with zero
+ *      failures (and is captured before any potential mtime bumps) so a page
+ *      is not re-embedded forever, yet a page whose embed failed (and whose
+ *      sections were therefore left deleted) stays above the mark and is
+ *      retried next pass.
+ *   2. **Capability reconcile**: embed capability rows (synthetic skill/CLI
  *      slugs) present in the page index but missing from the section store. The
  *      re-embed delta above EXCLUDES capability rows (they have `modifiedAt` 0,
- *      no mtime to diff), so the only other embedder is the one-time
- *      `backfillAllSections`. Without this stage a skill enabled AFTER that
- *      backfill (e.g. a flag-gated skill flipped on at runtime) lands in the
- *      index but never reaches the dense lane. See {@link reconcileCapabilityRows}.
+ *      no mtime to diff), so their only other embedders are the one-time
+ *      `backfillAllSections` and the version-triggered rebuild. Without this
+ *      stage a skill enabled AFTER that backfill (e.g. a flag-gated skill
+ *      flipped on at runtime) lands in the index but never reaches the dense
+ *      lane. See {@link reconcileCapabilityRows}.
  *   3. **Deleted-page prune** — diff the dense store's stored articles
  *      (`listSectionArticles`) against the live page-index slugs and
  *      `deleteSectionsForArticle` for any article that is no longer in the
@@ -153,9 +159,12 @@ export interface MaintainJobDeps {
    * Force a full re-embed when the section chunker version on record differs
    * from the current one (see `ensureSectionChunkerVersion`). Runs after the
    * collection is ensured and before deltas are selected, so the cleared
-   * high-water is what the selector reads.
+   * high-water is what the selector reads. Resolves to whether a chunker
+   * rebuild is pending (forced by this call, or left by an earlier one that
+   * no clean pass has committed since), which is the pass's cue to re-embed
+   * the capability rows the store holds before committing.
    */
-  ensureChunkerVersion: () => boolean;
+  ensureChunkerVersion: () => Promise<boolean>;
   /**
    * Every distinct `article` slug that currently has section points in the
    * dense store. The prune stage diffs this against the live page-index slugs
@@ -227,12 +236,14 @@ export interface BackfillJobDeps {
    */
   commitEmbedHighWater: (highWaterMs: number) => void;
   /**
-   * Force a full re-embed when the section chunker version on record differs
-   * from the current one (see `ensureSectionChunkerVersion`). Runs after the
-   * collection is ensured and before deltas are selected, so the cleared
-   * high-water is what the selector reads.
+   * Record the current section chunker version, forcing the maintain job's
+   * rebuild path when the one on record differs (see
+   * `ensureSectionChunkerVersion`). Runs after the collection is ensured and
+   * before the first write, so the version is on record before this pass
+   * commits. The backfill embeds every page and capability row regardless, so
+   * the pending-rebuild result is not consulted.
    */
-  ensureChunkerVersion: () => boolean;
+  ensureChunkerVersion: () => Promise<boolean>;
   /** Epoch-ms stamped as the new high-water mark; injectable for tests. */
   nowMs: () => number;
   /** Active assistant config (for the dense-store/embedding calls). */
@@ -260,9 +271,13 @@ export interface BackfillOutcome {
 export interface MaintainOutcome {
   /** True when both v3 flags were off and the job no-opped. */
   disabled: boolean;
-  /** Pages whose sections were re-chunked + re-embedded this pass. */
+  /**
+   * Articles whose sections were re-chunked + re-embedded this pass: the
+   * changed pages plus, on a version-triggered rebuild, the capability rows
+   * the store already held.
+   */
   reembedded: number;
-  /** Pages whose re-embed threw (and was contained). */
+  /** Re-embeds that threw (and were contained). */
   reembedFailures: number;
   /**
    * Capability rows (skills/CLI) present in the index but missing from the
@@ -475,55 +490,95 @@ async function reembedChangedPages(
 /**
  * Embed capability rows (synthetic skill/CLI slugs) present in the page index
  * but missing from the section dense store. The incremental re-embed selector
- * ({@link computeChangedPages}) excludes capability rows — they have no on-disk
- * mtime to delta against — so the ONLY other embedder is the one-time
- * {@link backfillAllSections}. Without this, a skill enabled AFTER that backfill
- * (e.g. a flag-gated skill flipped on at runtime) lands in the page index but
- * never reaches the dense lane. This stage makes the periodic maintain pass
- * self-heal: diff the live capability slugs against the stored section articles
- * and embed the missing ones.
- *
- * Each row is independent: a single build/upsert throw is logged and counted in
- * `reconcileFailures` without aborting the rest. A capability row whose body
- * resolves empty (its store has not seeded yet) is skipped WITHOUT deleting any
- * points — never replace good points with a blank — and is retried next pass.
+ * ({@link computeChangedPages}) excludes capability rows (they have no on-disk
+ * mtime to delta against), so their only other embedders are the one-time
+ * {@link backfillAllSections} and the version-triggered rebuild in
+ * {@link maintainJob}'s first stage. Without this, a skill enabled AFTER that
+ * backfill (e.g. a flag-gated skill flipped on at runtime) lands in the page
+ * index but never reaches the dense lane. This stage makes the periodic
+ * maintain pass self-heal: diff the live capability slugs against the stored
+ * section articles and embed the missing ones. Per-row containment and the
+ * cold-row skip live in {@link refreshCapabilityRows}.
  */
 async function reconcileCapabilityRows(
   deps: MaintainJobDeps,
 ): Promise<{ capabilitiesReconciled: number; reconcileFailures: number }> {
+  const { missing } = await capabilityRowsByPresence(deps);
+  const { embedded, failed } = await refreshCapabilityRows(missing, deps);
+  return { capabilitiesReconciled: embedded, reconcileFailures: failed };
+}
+
+/**
+ * The capability slugs (synthetic skill/CLI rows) the page index lists, split
+ * by whether the section dense store currently holds points for them.
+ * `missing` is what {@link reconcileCapabilityRows} embeds; `present` is what
+ * a version-triggered rebuild re-embeds, since the change-delta selector never
+ * names a capability row and the stored points would otherwise keep the
+ * previous chunker's boundaries.
+ */
+async function capabilityRowsByPresence(
+  deps: MaintainJobDeps,
+): Promise<{ present: Slug[]; missing: Slug[] }> {
   const [indexedSlugs, storedArticles] = await Promise.all([
     deps.listIndexedSlugs(),
     deps.listSectionArticles(),
   ]);
   const stored = new Set(storedArticles);
-  const missing = indexedSlugs.filter(
-    (slug) => isCapabilitySlug(slug) && !stored.has(slug),
-  );
+  const present: Slug[] = [];
+  const missing: Slug[] = [];
+  for (const slug of indexedSlugs) {
+    if (!isCapabilitySlug(slug)) {
+      continue;
+    }
+    if (stored.has(slug)) {
+      present.push(slug);
+    } else {
+      missing.push(slug);
+    }
+  }
+  return { present, missing };
+}
 
-  let capabilitiesReconciled = 0;
-  let reconcileFailures = 0;
-  for (const slug of missing) {
+/**
+ * Re-chunk + re-embed capability rows from their rendered capability bodies
+ * (`readCapabilityBody`). Each row is independent: a single build/delete/upsert
+ * throw is logged and counted in `failed` without aborting the rest. A row
+ * whose body resolves empty is counted in `cold` and skipped WITHOUT deleting
+ * any points (never replace good points with a blank): a capability store that
+ * has not seeded yet renders every row empty, and a slug the index lists but
+ * no store resolves renders empty on every pass, so callers retry cold rows on
+ * a later pass rather than fail the pass on them.
+ */
+async function refreshCapabilityRows(
+  slugs: Slug[],
+  deps: MaintainJobDeps,
+): Promise<{ embedded: number; failed: number; cold: number }> {
+  let embedded = 0;
+  let failed = 0;
+  let cold = 0;
+  for (const slug of slugs) {
     try {
       const body = await deps.readCapabilityBody(slug);
       if (body.trim().length === 0) {
+        cold += 1;
         continue;
-      } // store cold — retry next pass
+      }
       const index = await deps.buildSectionIndex(
         [slug],
         deps.readCapabilityBody,
       );
       await deps.deleteSectionsForArticle(deps.config, slug);
       await deps.upsertSections(deps.config, index.sections);
-      capabilitiesReconciled += 1;
+      embedded += 1;
     } catch (err) {
-      reconcileFailures += 1;
+      failed += 1;
       log.warn(
         { slug, err: err instanceof Error ? err.message : String(err) },
-        "memory-v3 maintain: capability reconcile embed failed (non-fatal)",
+        "memory-v3 maintain: capability row embed failed (non-fatal)",
       );
     }
   }
-  return { capabilitiesReconciled, reconcileFailures };
+  return { embedded, failed, cold };
 }
 
 /**
@@ -715,7 +770,7 @@ export async function backfillAllSections(
   await deps.ensureSectionCollection(deps.config);
   // The backfill re-embeds every page regardless; recording the chunker
   // version here keeps the maintain job from forcing a second full pass.
-  deps.ensureChunkerVersion();
+  await deps.ensureChunkerVersion();
 
   // Pre-flight: smoke-test the embedding backend BEFORE any delete. Each article
   // is processed delete-then-upsert, so starting a full backfill against a down
@@ -865,7 +920,8 @@ export async function maintainJob(
     await deps.ensureSectionCollection(deps.config);
     // A chunker version change clears the high-water the same way, and for
     // the same reason: the stored points no longer line up with the index.
-    deps.ensureChunkerVersion();
+    // The pending marker it leaves names this pass a version rebuild.
+    const rebuildPending = await deps.ensureChunkerVersion();
     const changed = await deps.selectChangedPages();
     const { reembedded, reembedFailures } = await reembedChangedPages(
       changed,
@@ -873,19 +929,44 @@ export async function maintainJob(
     );
     outcome.reembedded = reembedded;
     outcome.reembedFailures = reembedFailures;
-    // Only advance the high-water mark when nothing failed. A failed page is
-    // processed as delete-then-upsert, so a transient embed/Qdrant error leaves
-    // its sections deleted; if we advanced past its mtime, `computeChangedPages`
-    // would never re-select it (mtime <= high-water) and it would stay missing.
-    // Holding the checkpoint keeps every failed page above the mark so it
-    // retries next pass — the handful of already-succeeded pages re-embedding
-    // again is idempotent and cheap.
-    if (reembedFailures === 0) {
+    // A version rebuild must also refresh the capability rows the store
+    // already holds: the delta selector never names them (modifiedAt 0) and
+    // the reconcile stage below embeds only rows missing from the store, so
+    // without this their points would keep the previous chunker's boundaries
+    // past the commit that releases the dense-read hold. A cold row keeps its
+    // points and does not hold the commit (see refreshCapabilityRows).
+    if (rebuildPending) {
+      const { present } = await capabilityRowsByPresence(deps);
+      const { embedded, failed, cold } = await refreshCapabilityRows(
+        present,
+        deps,
+      );
+      outcome.reembedded += embedded;
+      outcome.reembedFailures += failed;
+      if (cold > 0) {
+        log.info(
+          { cold },
+          "memory-v3 maintain: chunker rebuild left capability rows whose body rendered empty untouched; they keep their points until a later pass resolves them",
+        );
+      }
+    }
+    // Only advance the high-water mark when nothing failed. A failed article
+    // is processed as delete-then-upsert, so a transient embed/Qdrant error
+    // leaves its sections deleted; if we advanced past a page's mtime,
+    // `computeChangedPages` would never re-select it (mtime <= high-water) and
+    // it would stay missing, and a commit would release the dense-read hold
+    // over a capability row whose points are gone. Holding the checkpoint
+    // keeps every failed article in the next pass so it retries; the handful
+    // of already-succeeded articles re-embedding again is idempotent and cheap.
+    if (outcome.reembedFailures === 0) {
       deps.commitEmbedHighWater(startedAtMs);
     } else {
       log.info(
-        { reembedded, reembedFailures },
-        "memory-v3 maintain: embed checkpoint held (page failures) — failed pages retry next pass",
+        {
+          reembedded: outcome.reembedded,
+          reembedFailures: outcome.reembedFailures,
+        },
+        "memory-v3 maintain: embed checkpoint held (embed failures); failed articles retry next pass",
       );
     }
   } catch (err) {
@@ -898,10 +979,10 @@ export async function maintainJob(
 
   // Stage 2: embed capability rows (skills/CLI) present in the index but missing
   // from the section store. They have modifiedAt 0, so computeChangedPages never
-  // selects them; the one-time backfill is otherwise their only embedder, so a
-  // skill enabled after that backfill stays invisible to the dense lane until
-  // this self-heals it. Contained: a failure is logged + recorded without
-  // aborting later stages.
+  // selects them; the one-time backfill and the version rebuild above are
+  // otherwise their only embedders, so a skill enabled after that backfill
+  // stays invisible to the dense lane until this self-heals it. Contained: a
+  // failure is logged + recorded without aborting later stages.
   try {
     const { capabilitiesReconciled, reconcileFailures } =
       await reconcileCapabilityRows(deps);
