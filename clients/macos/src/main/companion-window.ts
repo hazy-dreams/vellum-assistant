@@ -1142,6 +1142,15 @@ const sameCaptureTarget = (
 /** Point at things on the shared surface, or take down what is pointed at. */
 const setCoachmarks = (next: readonly CompanionCoachmark[]): void => {
   const resolved = framesTheShare() ? next : NO_COACHMARKS;
+  if (resolved.length > 0) {
+    // A mark says go and press that, so the press has to reach the app under
+    // it. Drawing is the one thing that makes this frame take the mouse, and
+    // a press on a ringed control would land in the drawing instead. Here
+    // rather than at either entrance, because it is a fact about marks being
+    // up rather than about who put them there. The mode is the user's, and
+    // pressing Draw again gets it back.
+    setAnnotating(false);
+  }
   const against = resolved === NO_COACHMARKS ? undefined : context.screenShare;
   if (resolved === coachmarks && sameCaptureTarget(against, coachmarkTarget)) {
     return;
@@ -1167,6 +1176,26 @@ const syncCoachmarks = (): void => {
     return;
   }
   setCoachmarks(NO_COACHMARKS);
+};
+
+/**
+ * Point at things on the shared surface on the assistant's behalf, and say
+ * whether the marks stand.
+ *
+ * The answer is the point of this entrance. A press from the pill can watch
+ * the surface for what it did; the assistant is somewhere else, and marks it
+ * believes it placed on a screen nobody is sharing would have it talking
+ * about a ring the user cannot see. So a refusal comes back as one rather
+ * than as silence.
+ *
+ * Taking them down always succeeds: whatever the frame is around, marks that
+ * are gone are gone.
+ */
+export const showCompanionCoachmarks = (
+  marks: readonly CompanionCoachmark[],
+): boolean => {
+  setCoachmarks(marks);
+  return marks.length === 0 || framesTheShare();
 };
 
 /**
