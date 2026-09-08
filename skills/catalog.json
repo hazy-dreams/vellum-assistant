@@ -1055,7 +1055,7 @@
         }
       },
       "compatibility": "Designed for Vellum personal assistants",
-      "updatedAt": "2026-07-07T20:33:02.000Z"
+      "updatedAt": "2026-09-08T14:23:25.000Z"
     },
     {
       "id": "vellum-client-capabilities",
@@ -1068,7 +1068,9 @@
           "display-name": "Vellum Client Capabilities",
           "activation-hints": [
             "asked to use the user's current location, GPS, or device position",
-            "whether the app can access a device sensor, permission, or hardware feature"
+            "whether the app can access a device sensor, permission, or hardware feature",
+            "browsing failed, timed out, or could not reach a page that needs a login",
+            "whether to install the desktop app or Chrome extension"
           ],
           "avoid-when": [
             "the user already gave a location as text (just use it)"
@@ -1076,7 +1078,7 @@
         }
       },
       "compatibility": "Designed for Vellum personal assistants",
-      "updatedAt": "2026-08-27T13:36:21.000Z"
+      "updatedAt": "2026-09-08T14:23:25.000Z"
     },
     {
       "id": "vellum-conversation-management",
