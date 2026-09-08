@@ -11,12 +11,12 @@ import { extractRetryAfterMs } from "../../util/retry.js";
 import { partialTagSuffix as sharedPartialTagSuffix } from "../../util/think-tag-stream.js";
 import { clampProviderString } from "../content-block-size.js";
 import { fileBlockToProviderText } from "../file-block-text.js";
+import { requestSupportsInlineAudio } from "../inline-audio-support.js";
 import {
   base64Source,
   mediaSourceByteLength,
   resolveMediaReferences,
 } from "../media-resolve.js";
-import { modelSupportsAudioInput } from "../model-catalog.js";
 import { PLACEHOLDER_EMPTY_TURN } from "../placeholder-sentinels.js";
 import { recordProviderRequestDiagnostics } from "../request-diagnostics.js";
 import { createStreamTimeout } from "../stream-timeout.js";
@@ -772,7 +772,7 @@ export class OpenAIChatCompletionsProvider implements Provider {
       const openaiMessages = await this.toOpenAIMessages(
         messages,
         systemPrompt,
-        modelSupportsAudioInput(modelOverride ?? this.model),
+        requestSupportsInlineAudio(modelOverride ?? this.model),
       );
 
       recordProviderRequestDiagnostics({
