@@ -502,25 +502,27 @@ html[data-page-transition="pop"]::view-transition-new(root) {
 @keyframes companion-coachmark-in {
   from {
     opacity: 0;
-    transform: scale(1.06);
+    /* Composed with whichever way the mark is turned rather than replacing it.
+       With only a `from`, the implicit `to` is the element's own transform, so
+       a scale here alone makes a turned arrow spend the whole entrance
+       rotating into place instead of arriving. */
+    transform: var(--companion-coachmark-turn) scale(1.06);
   }
 }
 
-.companion-coachmark {
-  position: absolute;
-  border-radius: 6px;
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--companion-ring-accent, #5eead4) 90%, transparent),
-    0 0 0 5px color-mix(in srgb, black 30%, transparent);
-  animation: companion-coachmark-in 260ms ease-out 1;
-}
-
-/* The arrow, for a mark that indicates a place rather than an extent. Same
- * accent over the same dark halo as the ring, for the same reason: it has to
- * be found over a white document and a dark editor alike. Rounded ends so the
- * shaft and the head read as one stroke rather than three. */
+/* Both marks are strokes: a loop for an extent, an arrow for a place, each a
+ * path drawn in the companion's own hand, which is why neither is a CSS
+ * shape. A border-radius cannot wander, and a mark that cannot wander is a
+ * machine's. Rounded ends so a shaft and its head read as one stroke rather
+ * than three. */
+.companion-coachmark,
 .companion-coachmark-pointer {
   position: absolute;
+  /* Which way the mark is turned, set by the layer for an arrow whose tail
+     hangs above its point. A variable rather than a plain transform so the
+     entrance can compose with it. */
+  --companion-coachmark-turn: rotate(0deg);
+  transform: var(--companion-coachmark-turn);
   overflow: visible;
   fill: none;
   stroke-linecap: round;
@@ -528,11 +530,16 @@ html[data-page-transition="pop"]::view-transition-new(root) {
   animation: companion-coachmark-in 260ms ease-out 1;
 }
 
+/* The accent over a dark halo, which is what keeps a mark found over a white
+ * document and a dark editor alike. The halo is drawn first and wider, so it
+ * is an outline around the ink rather than a shadow under it. */
+.companion-coachmark-halo,
 .companion-coachmark-pointer-halo {
   stroke: color-mix(in srgb, black 30%, transparent);
   stroke-width: 9;
 }
 
+.companion-coachmark-ink,
 .companion-coachmark-pointer-ink {
   stroke: color-mix(in srgb, var(--companion-ring-accent, #5eead4) 90%, transparent);
   stroke-width: 5;
@@ -576,6 +583,7 @@ html[data-page-transition="pop"]::view-transition-new(root) {
  * user is being sent, and its entrance is decoration on top of that. */
 @media (prefers-reduced-motion: reduce) {
   .companion-coachmark,
+  .companion-coachmark-pointer,
   .companion-coachmark-caption {
     animation: none;
   }
