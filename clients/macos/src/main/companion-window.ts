@@ -1318,7 +1318,10 @@ export const showCompanionCoachmarks = async (
   const marks: PlacedCoachmark[] = [];
   for (const request of requests) {
     if (!namesATarget(request)) {
-      marks.push(request);
+      // Bounds given outright are an extent someone means, so they keep the
+      // ring. The kind is added here rather than asked for: what the caller
+      // sends is a rectangle, and how a rectangle is drawn is this side's.
+      marks.push({ kind: "region", ...request });
       continue;
     }
     const placed = await placeOnNamedTarget(share, request);
@@ -1328,12 +1331,12 @@ export const showCompanionCoachmarks = async (
     if (sequence !== coachmarkRequests) {
       return { kind: "refused", refusal: "superseded" };
     }
-    // Asked against the share these marks are being
-    // resolved on rather than against whatever is shared now. Resolving a
-    // name is a round trip to the helper and the user is still working the
-    // whole time: a share that moved and had a frame of its own served in
-    // that window answers every check the current state can make, and these
-    // marks would land on it measured against the surface it replaced.
+    // Asked against the share these marks are being resolved on rather than
+    // against whatever is shared now. Resolving a name is a round trip to the
+    // helper and the user is still working the whole time: a share that moved
+    // and had a frame of its own served in that window answers every check
+    // the current state can make, and these marks would land on it measured
+    // against the surface it replaced.
     const moved = whyNotToDraw(conversationId, share);
     if (moved !== null) {
       return { kind: "refused", refusal: moved };
@@ -1417,11 +1420,15 @@ const placeOnNamedTarget = async (
   if (bounds === null) {
     return { target: request.target, reason: "no-tree", candidates: [] };
   }
+  // The centre, not the frame. An element's frame is its hit area, which is
+  // routinely a good deal larger than the thing drawn inside it, and it can
+  // belong to the small triangle that discloses a row rather than the row.
+  // Its position is trustworthy where its extent is not, so the arrow is
+  // aimed at the middle of it and nothing claims a size.
   return {
-    x: (located.x - bounds.x) / bounds.width,
-    y: (located.y - bounds.y) / bounds.height,
-    width: located.width / bounds.width,
-    height: located.height / bounds.height,
+    kind: "point",
+    x: (located.x + located.width / 2 - bounds.x) / bounds.width,
+    y: (located.y + located.height / 2 - bounds.y) / bounds.height,
     ...(request.caption === undefined ? {} : { caption: request.caption }),
     matched: located.label,
   };
@@ -1436,6 +1443,19 @@ const placeOnNamedTarget = async (
 const surfaceBounds = async (
   share: WatchCaptureTarget,
 ): Promise<Rectangle | null> => {
+  // The frame's own rectangle, because that is the one the marks are drawn
+  // on, and it is not always the one the share names. A frame asked for a
+  // display's whole bounds is held to that display's work area, which begins
+  // a menu bar lower and ends a menu bar shorter, so a fraction measured
+  // against the display and drawn into the frame lands low by exactly that
+  // much. Deriving the surface twice is what let the two disagree; asking the
+  // frame is what keeps them the same rectangle by construction.
+  const frame = getFloatingWindow(WATCH_FRAME_KIND);
+  if (frame !== null) {
+    return frame.getBounds();
+  }
+  // No frame yet, which a mark cannot be drawn on anyway. Answered from the
+  // share so the caller's own guards decide what to say about it.
   if (share.kind === "display") {
     return (
       screen.getAllDisplays().find((d) => d.id === share.displayId)?.bounds ??
