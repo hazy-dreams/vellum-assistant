@@ -4553,6 +4553,8 @@ paths:
                         - type
                     slackBotMentioned:
                       type: boolean
+                    slackEditedTs:
+                      type: string
                     account:
                       type: string
                     actorTeamId:
