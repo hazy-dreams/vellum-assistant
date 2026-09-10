@@ -23,7 +23,7 @@ const log = getLogger("plugin-ingress-approvals");
 /**
  * Digest of what a declaration asks for.
  *
- * Covers reach only — each route's transport, signer, handshake scheme, path,
+ * Covers reach only: each route's transport, exposure, signer, handshake scheme, path,
  * how it is verified, and whether its replies deliver messages into the
  * assistant, order-independent. A `description` reword leaves the digest
  * alone, so it does not revoke an approval, while adding a route, changing
@@ -41,8 +41,8 @@ const log = getLogger("plugin-ingress-approvals");
  * not contain whitespace (see `IngressRouteSchema`), so a three-token line can
  * never be read as a four-token one, and the two optional encodings are each
  * appended behind their own separator — a tab for verification, a form feed
- * for inbound — neither of which a path may carry and both of which
- * `JSON.stringify` escapes rather than emits.
+ * for inbound, and a vertical tab for private exposure. Paths cannot carry
+ * these separators and `JSON.stringify` escapes rather than emits them.
  */
 export function ingressDeclarationDigest(
   routes: readonly IngressRoute[],
@@ -56,9 +56,10 @@ export function ingressDeclarationDigest(
       const verified = route.verification
         ? `${base}\t${canonicalVerification(route.verification)}`
         : base;
-      return route.inbound
+      const inbound = route.inbound
         ? `${verified}\f${canonicalInbound(route.inbound)}`
         : verified;
+      return route.exposure === "private" ? `${inbound}\vprivate` : inbound;
     })
     .sort()
     .join("\n");
@@ -222,7 +223,9 @@ export function findServableRoute(
  * refuses.
  */
 function isRouteServable(route: IngressRoute, approved: boolean): boolean {
-  return approved || route.signer === "vellum";
+  return (
+    approved || (route.exposure !== "private" && route.signer === "vellum")
+  );
 }
 
 /** A public webhook path the gateway would serve right now. */
@@ -265,7 +268,7 @@ export function listServablePluginWebhookPaths(
   ): void => {
     for (const declaration of declarations) {
       for (const route of declaration.routes) {
-        if (isRouteServable(route, approved)) {
+        if (route.exposure !== "private" && isRouteServable(route, approved)) {
           const path = pluginWebhookPath(declaration.plugin, route.path);
           paths.push({ path, source: declaration.plugin });
           paths.push({ path: `${path}/`, source: declaration.plugin });

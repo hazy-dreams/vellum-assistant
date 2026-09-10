@@ -189,6 +189,85 @@ function post(path: string, body = "{}", secret = PLUGIN_SECRET): Request {
 }
 
 describe("approved routes", () => {
+  it("serves private HTTP only in private listener context without credentials", async () => {
+    const { calls, fetchImpl } = recordingFetch();
+    const privateRoute = { ...ROUTE, exposure: "private" as const };
+    const deps = {
+      config: CONFIG,
+      credentials: undefined,
+      resolve: () => approvedWith([privateRoute]),
+      fetchImpl,
+    };
+    const publicHandler = createPluginWebhookHandler({
+      ...deps,
+      credentials: CREDENTIALS,
+    });
+    const privateHandler = createPluginWebhookHandler({
+      ...deps,
+      listener: "private",
+    });
+    expect(
+      (await publicHandler(post("/", "{}"), "meeting-bot", "realtime")).status,
+    ).toBe(404);
+    expect(calls).toHaveLength(0);
+    expect(
+      (await privateHandler(post("/", "{}", ""), "meeting-bot", "realtime"))
+        .status,
+    ).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      "http://runtime.test:7821/v1/x/plugins/meeting-bot/realtime",
+    );
+  });
+
+  it("private context rejects public routes and unapproved private routes", async () => {
+    const { calls, fetchImpl } = recordingFetch();
+    for (const view of [
+      approvedWith([ROUTE]),
+      resolution({
+        pending: [
+          {
+            plugin: "meeting-bot",
+            digest: "pending",
+            routes: [{ ...ROUTE, exposure: "private" }],
+          },
+        ],
+      }),
+    ]) {
+      const handle = createPluginWebhookHandler({
+        config: CONFIG,
+        credentials: CREDENTIALS,
+        resolve: () => view,
+        fetchImpl,
+        listener: "private",
+      });
+      expect((await handle(post("/"), "meeting-bot", "realtime")).status).toBe(
+        404,
+      );
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps the existing body limit for private routes", async () => {
+    const { calls, fetchImpl } = recordingFetch();
+    const handle = createPluginWebhookHandler({
+      config: CONFIG,
+      credentials: undefined,
+      listener: "private",
+      resolve: () => approvedWith([{ ...ROUTE, exposure: "private" }]),
+      fetchImpl,
+    });
+    expect(
+      (
+        await handle(
+          post("/", "x".repeat(CONFIG.maxWebhookPayloadBytes + 1), ""),
+          "meeting-bot",
+          "realtime",
+        )
+      ).status,
+    ).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
   it("forwards to the plugin's route namespace on the runtime", async () => {
     const { calls, fetchImpl } = recordingFetch();
     const handle = createPluginWebhookHandler({
@@ -955,8 +1034,7 @@ describe("standard-webhooks verification", () => {
     opts: { id?: string; timestamp?: string } = {},
   ): { id: string; timestamp: string; signature: string } {
     const id = opts.id ?? MSG_ID;
-    const timestamp =
-      opts.timestamp ?? String(Math.floor(Date.now() / 1000));
+    const timestamp = opts.timestamp ?? String(Math.floor(Date.now() / 1000));
     const digest = createHmac("sha256", KEY_BYTES)
       .update(`${id}.${timestamp}.${body}`, "utf8")
       .digest("base64");
@@ -1628,7 +1706,11 @@ describe("HMAC URL and form-encoded inbound", () => {
 
   function twilioPost(
     params: Record<string, string>,
-    opts: { url?: string; signature?: string; headers?: Record<string, string> } = {},
+    opts: {
+      url?: string;
+      signature?: string;
+      headers?: Record<string, string>;
+    } = {},
   ): Request {
     const url =
       opts.url ?? "http://gateway/webhooks/plugins/meeting-bot/realtime";
@@ -1755,8 +1837,7 @@ describe("HMAC URL and form-encoded inbound", () => {
     // Twilio signed the platform callback URL; the gateway sees localhost.
     // The proxy injects the original URL it handed the vendor, and the
     // signature covers that spelling rather than the one on the wire here.
-    const injected =
-      "https://platform.example.test/v1/gateway/callbacks/cb-1";
+    const injected = "https://platform.example.test/v1/gateway/callbacks/cb-1";
     const params: Record<string, string> = {
       MessageSid: "SM9004",
       From: "+15555550101",

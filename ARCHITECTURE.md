@@ -2,6 +2,8 @@
 
 This file is the cross-system architecture index. Detailed designs live in domain docs close to code ownership.
 
+Private plugin HTTP ingress uses a dedicated gateway listener bound to `127.0.0.1`, fronted by Tailscale Serve. Guardian-approved private declarations are excluded from public ingress and general runtime proxy paths. See [private plugin ingress](gateway/ARCHITECTURE.md#private-plugin-http-ingress).
+
 ## Architecture Docs
 
 | Domain                                      | Architecture Doc                                                                                   |
@@ -25,7 +27,7 @@ This file is the cross-system architecture index. Detailed designs live in domai
 | Workflow orchestration engine               | [Workflow Orchestration Engine](#workflow-orchestration-engine) (this file)                        |
 | Watch sessions                              | [Watch Sessions](#watch-sessions) (this file)                                                      |
 | Screen annotation                           | [Screen Annotation](#screen-annotation) (this file)                                                |
-| Notification sender avatars                  | [Notification Sender Avatars](#notification-sender-avatars) (this file)                            |
+| Notification sender avatars                 | [Notification Sender Avatars](#notification-sender-avatars) (this file)                            |
 | Workflow authoring guide                    | [`assistant/docs/workflows.md`](assistant/docs/workflows.md)                                       |
 | Workflow manual testing runbook             | [`assistant/docs/workflows-testing.md`](assistant/docs/workflows-testing.md)                       |
 | Service communication matrix                | [`docs/service-communication-matrix.md`](docs/service-communication-matrix.md)                     |

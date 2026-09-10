@@ -15,12 +15,27 @@
  */
 
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { z } from "zod";
 
 import { getIsPlatform } from "../config/env-registry.js";
 import { getConfig } from "../config/loader.js";
+import { IngressConfigSchema } from "../config/schemas/ingress.js";
 import { resolveCallbackUrl } from "../inbound/platform-callback-registration.js";
 import { getPublicBaseUrl } from "../inbound/public-ingress-urls.js";
 import { getCurrentPluginName } from "../plugins/plugin-execution-context.js";
+import { getWorkspaceDir } from "../util/platform.js";
+
+const RouteExposureManifestSchema = z.object({
+  routes: z.array(
+    z.object({
+      path: z.string(),
+      exposure: z.enum(["public", "private"]).optional(),
+    }),
+  ),
+});
 
 /**
  * The namespace the gateway serves plugin ingress under. Fixed here rather
@@ -141,6 +156,36 @@ export async function resolveWebhookUrl(
   }
 
   const callbackPath = `${PLUGIN_WEBHOOK_PREFIX}/${plugin}/${path}`;
+
+  const manifestPath = join(
+    getWorkspaceDir(),
+    "plugins",
+    plugin,
+    "channels",
+    "ingress.json",
+  );
+  if (existsSync(manifestPath)) {
+    const manifest = RouteExposureManifestSchema.parse(
+      JSON.parse(readFileSync(manifestPath, "utf8")),
+    );
+    const route = manifest.routes.find((candidate) => candidate.path === path);
+    if (!route) {
+      throw new Error(`Plugin webhook path is not declared: "${path}"`);
+    }
+    if (route.exposure === "private") {
+      const ingress = IngressConfigSchema.safeParse(getConfig().ingress);
+      if (
+        !ingress.success ||
+        !ingress.data.privatePort ||
+        !ingress.data.privateBaseUrl
+      ) {
+        throw new Error(
+          "Private ingress requires ingress.privatePort and ingress.privateBaseUrl",
+        );
+      }
+      return `${ingress.data.privateBaseUrl.replace(/\/+$/, "")}/${callbackPath}`;
+    }
+  }
 
   let ingressUrl: string | undefined;
   const resolved = await resolveCallbackUrl(

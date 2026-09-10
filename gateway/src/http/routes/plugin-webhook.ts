@@ -244,7 +244,10 @@ async function notifyPluginAdmissionDenied(opts: {
     );
     const response = await proxyForwardToResponse(noticeReq, {
       baseUrl: forward.config.assistantRuntimeBaseUrl,
-      path: pluginRouteUpstreamPath(plugin, PLUGIN_ADMISSION_DENIED_NOTICE_PATH),
+      path: pluginRouteUpstreamPath(
+        plugin,
+        PLUGIN_ADMISSION_DENIED_NOTICE_PATH,
+      ),
       serviceToken: mintServiceToken(),
       timeoutMs: forward.config.runtimeTimeoutMs,
       fetchImpl: forward.fetchImpl,
@@ -265,7 +268,9 @@ async function notifyPluginAdmissionDenied(opts: {
 
 export interface PluginWebhookHandlerDeps {
   config: GatewayConfig;
-  /** Approved-ingress view; cached by the caller so this stays off the disk. */
+  /** Selected by the server, never by request headers or network identity. */
+  listener?: "public" | "private";
+  /** Current declaration and guardian approval view. */
   resolve: () => PluginIngressResolution;
   /** Signing secrets, read through the TTL cache so rotation is picked up. */
   credentials: CredentialCache | undefined;
@@ -327,6 +332,13 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
       return notFound();
     }
     const route = match.route;
+    const privateRoute = route.exposure === "private";
+    if (
+      privateRoute !== (deps.listener === "private") ||
+      (privateRoute && !match.servable)
+    ) {
+      return notFound();
+    }
 
     // Cap the body on the streamed bytes before anything forwards it. The
     // caller is unauthenticated and Content-Length is attacker-controlled
@@ -343,6 +355,18 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
       return match.servable
         ? Response.json({ error: "Bad Request" }, { status: 400 })
         : notFound();
+    }
+
+    if (privateRoute) {
+      return forwardToPlugin({
+        config,
+        plugin,
+        routePath: route.path,
+        req,
+        body: body.bytes,
+        search: new URL(req.url).search,
+        fetchImpl,
+      });
     }
 
     // Signature check before the forward, and fail-closed when no secret is
@@ -480,9 +504,7 @@ async function deliverGatedInbound(opts: {
   const { config, plugin, routePath, req, body } = forward;
 
   let parsed: unknown;
-  const contentType = (
-    req.headers.get("content-type") ?? ""
-  ).toLowerCase();
+  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
   if (contentType.includes("application/x-www-form-urlencoded")) {
     // A form-encoded delivery (Twilio's webhooks are always this shape).
     // Parsed into a flat record so the inbound declaration's field paths can

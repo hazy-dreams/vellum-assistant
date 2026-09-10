@@ -88,6 +88,33 @@ const IngressBaseSchema = z
       .describe(
         "Public-facing base URL for the ingress server (used in webhook callbacks)",
       ),
+    privatePort: z
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .optional()
+      .describe(
+        "Loopback-only private plugin HTTP port; requires a gateway restart",
+      ),
+    privateBaseUrl: z
+      .string()
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return (
+            url.protocol === "https:" &&
+            !url.username &&
+            !url.password &&
+            !url.search &&
+            !url.hash
+          );
+        } catch {
+          return false;
+        }
+      }, "Private ingress requires an HTTPS base URL without credentials, query or fragment")
+      .optional()
+      .describe("Tailscale Serve base URL for private plugin ingress"),
     webhook: IngressWebhookConfigSchema.default(
       IngressWebhookConfigSchema.parse({}),
     ),

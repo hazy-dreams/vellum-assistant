@@ -1,6 +1,9 @@
 import { describe, test, expect, mock, afterEach } from "bun:test";
 import type { GatewayConfig } from "../config.js";
 import { initSigningKey } from "../auth/token-service.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { testWorkspaceDir } from "./test-preload.js";
 
 const TEST_SIGNING_KEY = Buffer.from("test-signing-key-at-least-32-bytes-long");
 initSigningKey(TEST_SIGNING_KEY);
@@ -51,6 +54,55 @@ afterEach(() => {
 });
 
 describe("runtime proxy handler", () => {
+  test("blocks private plugin handlers through general routes and index aliases", async () => {
+    const pluginDir = join(testWorkspaceDir, "plugins", "example-plugin");
+    mkdirSync(join(pluginDir, "channels"), { recursive: true });
+    writeFileSync(
+      join(pluginDir, "package.json"),
+      JSON.stringify({ name: "example-plugin" }),
+    );
+    writeFileSync(
+      join(pluginDir, "channels", "ingress.json"),
+      JSON.stringify({
+        routes: [
+          {
+            path: "events",
+            kind: "http",
+            exposure: "private",
+            description: "Private events",
+          },
+          { path: "public-events", kind: "http", description: "Public events" },
+        ],
+      }),
+    );
+    const handler = createRuntimeProxyHandler(makeConfig());
+    for (const prefix of ["/x/", "/v1/x/", "/v1/assistants/assistant-123/x/"]) {
+      for (const path of [
+        "events",
+        "events/",
+        "events/index",
+        "%65vents",
+        "events//index",
+      ]) {
+        const res = await handler(
+          new Request(`http://gateway${prefix}plugins/example-plugin/${path}`, {
+            headers: { "x-vellum-private-ingress": "true" },
+          }),
+        );
+        expect(res.status).toBe(404);
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      (
+        await handler(
+          new Request(
+            "http://gateway/v1/x/plugins/example-plugin/public-events",
+          ),
+        )
+      ).status,
+    ).toBe(200);
+  });
   test("rewrites legacy /v1/assistants/:assistantId/... to flat /v1/... for upstream", async () => {
     const captured: { url: string }[] = [];
     fetchMock = mock(async (input: string | URL | Request) => {

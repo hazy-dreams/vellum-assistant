@@ -1,4 +1,4 @@
-/** Discovery of plugin-declared public ingress routes from the workspace volume. */
+/** Discovery of plugin-declared ingress routes from the workspace volume. */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
@@ -36,8 +36,8 @@ export const IngressSignerSchema = z.enum(["plugin", "vellum"]);
 export type IngressSigner = z.infer<typeof IngressSignerSchema>;
 
 /**
- * Where the caller carries its signature. Selects the scheme, never whether
- * one is required — an unsigned plugin route does not exist.
+ * Where a public caller carries its signature. Private HTTP routes bypass
+ * signature verification on the dedicated listener.
  */
 export const IngressHandshakeSchema = z.enum([
   "signed-headers",
@@ -99,6 +99,8 @@ export const IngressRouteSchema = z.object({
       message: "path must not contain . or .. segments",
     }),
   kind: IngressRouteKindSchema,
+  /** Private HTTP routes are served only on the dedicated loopback listener. */
+  exposure: z.enum(["public", "private"]).optional(),
   /**
    * Whose secret signs requests to this route.
    *
@@ -305,6 +307,18 @@ export function parsePluginIngressManifest(
       throw new Error(`duplicate route ${route.path}`);
     }
     seen.add(route.path);
+    if (
+      route.exposure === "private" &&
+      (route.kind !== "http" ||
+        route.signer !== "plugin" ||
+        route.handshake !== "signed-headers" ||
+        route.verification ||
+        route.inbound)
+    ) {
+      throw new Error(
+        `route ${route.path}: private ingress supports only HTTP without signing or inbound policy declarations`,
+      );
+    }
     // Rejected here rather than in the schema so the whole declaration fails
     // with one message, the same way a duplicate path does.
     if (route.handshake === "signed-query" && route.kind !== "websocket") {

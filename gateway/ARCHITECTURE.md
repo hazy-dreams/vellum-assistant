@@ -32,6 +32,41 @@ Internet
        +-- /webhooks/* --> BLOCKED (404, never forwarded to runtime)
 ```
 
+### Private Plugin HTTP Ingress
+
+An HTTP route in `channels/ingress.json` may declare `exposure: "private"`.
+Omitted or `"public"` exposure preserves existing signatures and approval
+digests. Private exposure changes the digest and requires guardian approval;
+private declarations cannot add signing, WebSocket, or inbound identity policy.
+
+At gateway startup, optional `ingress.privatePort` binds a separate listener
+explicitly to `127.0.0.1`. An absent port leaves it disabled; a bind failure is
+logged and leaves private ingress unavailable, with no fallback listener.
+The listener only dispatches `/webhooks/plugins/<plugin>/<path>` through the
+shared plugin handler in private context, retaining the existing body limit
+and internal runtime forwarding. It skips signature verification. The ordinary
+listener rejects private routes, and the general runtime proxy blocks private
+handler paths, including `/x/`, `/v1/x/`, assistant-scoped and index aliases.
+Invalid declarations fail closed for their plugin's general proxy routes.
+HTTP dispatch reads current declarations so exposure changes do not retain
+public reach through the discovery cache.
+
+Private routes are excluded from the public webhook registry used by Velay.
+Plugin URL resolution reads the declaration before callback registration and
+requires both `ingress.privatePort` and an HTTPS `ingress.privateBaseUrl` for a
+private route. It never falls back to public ingress or managed callbacks.
+The configured URL does not assert listener health or Tailnet reachability.
+
+```text
+Trusted Tailnet device -> Tailscale Serve -> 127.0.0.1:<privatePort>
+  -> approved private plugin HTTP handler -> internal runtime plugin route
+```
+
+The entire local host and Tailnet are trusted. Tailscale ACLs/grants own caller
+authorization; Vellum does not parse identity headers or add caller credentials.
+Serve setup, Funnel/public proxy configuration, and container network placement
+are deployment responsibilities. This source path does not configure Tailscale.
+
 ### STT Route Proxying (Assistant-Scoped Rewrite)
 
 Clients send speech-to-text transcription requests through the gateway to the daemon's STT service. Clients POST to the assistant-scoped path `/v1/assistants/:assistantId/stt/transcribe`, which the gateway's runtime proxy rewrites to the flat daemon path `/v1/stt/transcribe`. This follows the same assistant-scoped rewrite pattern used by other client-facing endpoints (feature flags, privacy config, etc.).

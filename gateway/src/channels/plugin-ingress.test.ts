@@ -26,6 +26,34 @@ import {
 
 const created: string[] = [];
 
+describe("private declarations", () => {
+  const route = {
+    path: "events",
+    kind: "http",
+    exposure: "private",
+    description: "Private events",
+  };
+  it("preserves private exposure", () => {
+    expect(
+      parsePluginIngressManifest({ routes: [route] }).routes[0]!.exposure,
+    ).toBe("private");
+  });
+  it("refuses unsupported private transports, signing and inbound policy", () => {
+    for (const change of [
+      { kind: "websocket" },
+      { signer: "vellum" },
+      { handshake: "signed-query" },
+      { exposure: "unknown" },
+      { inbound: {} },
+      { verification: {} },
+    ]) {
+      expect(() =>
+        parsePluginIngressManifest({ routes: [{ ...route, ...change }] }),
+      ).toThrow();
+    }
+  });
+});
+
 afterEach(() => {
   while (created.length > 0) {
     const dir = created.pop();

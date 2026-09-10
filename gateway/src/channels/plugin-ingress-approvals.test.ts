@@ -98,6 +98,43 @@ function route(
 }
 
 describe("ingressDeclarationDigest", () => {
+  it("includes private exposure while preserving legacy public digests", () => {
+    const legacy = route({ path: "events" });
+    expect(ingressDeclarationDigest([{ ...legacy, exposure: "public" }])).toBe(
+      ingressDeclarationDigest([legacy]),
+    );
+    expect(
+      ingressDeclarationDigest([{ ...legacy, exposure: "private" }]),
+    ).not.toBe(ingressDeclarationDigest([legacy]));
+  });
+
+  it("excludes private routes from the public registry and always requires approval", () => {
+    const privateRoute = route({
+      path: "events",
+      exposure: "private",
+      signer: "vellum",
+    });
+    const pending = {
+      plugin: "example-plugin",
+      routes: [privateRoute],
+      digest: "pending",
+    };
+    expect(
+      findServableRoute(
+        { approved: [], pending: [pending], problems: [] },
+        pending.plugin,
+        "events",
+        "http",
+      ),
+    ).toBeUndefined();
+    expect(
+      listServablePluginWebhookPaths({
+        approved: [pending],
+        pending: [],
+        problems: [],
+      }),
+    ).toEqual([]);
+  });
   it("is stable across route ordering", () => {
     expect(
       ingressDeclarationDigest([route({ path: "a" }), route({ path: "b" })]),

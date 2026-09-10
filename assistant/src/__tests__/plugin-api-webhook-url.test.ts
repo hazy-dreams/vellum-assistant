@@ -8,7 +8,11 @@
  * registration type it derives, and what it refuses.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+
+import { getWorkspaceDir } from "../util/platform.js";
 
 let mockIsPlatform = false;
 
@@ -28,6 +32,70 @@ const { runInPluginContext } =
   await import("../plugins/plugin-execution-context.js");
 
 describe("resolveWebhookUrl", () => {
+  test("private declarations resolve only a configured private URL, never public callbacks", async () => {
+    const dir = join(
+      getWorkspaceDir(),
+      "plugins",
+      "example-plugin",
+      "channels",
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ingress.json"),
+      JSON.stringify({
+        routes: [
+          {
+            path: "events",
+            kind: "http",
+            exposure: "private",
+            description: "Private events",
+          },
+        ],
+      }),
+    );
+    const configSpy = spyOn(loader, "getConfig");
+    const spy = spyOn(registration, "resolveCallbackUrl").mockResolvedValue(
+      "https://public.example.com/events",
+    );
+    try {
+      for (const isPlatform of [false, true]) {
+        mockIsPlatform = isPlatform;
+        for (const privateConfig of [
+          {},
+          { privatePort: 9876 },
+          { privateBaseUrl: "https://private.example.com" },
+          { privatePort: 9876, privateBaseUrl: "invalid" },
+          { privatePort: 9876, privateBaseUrl: "http://private.example.com" },
+        ]) {
+          configSpy.mockReturnValue({
+            ingress: {
+              publicBaseUrl: "https://public.example.com",
+              ...privateConfig,
+            },
+          } as ReturnType<typeof loader.getConfig>);
+          await expect(
+            resolveWebhookUrl({ plugin: "example-plugin", path: "events" }),
+          ).rejects.toThrow(/Private ingress/);
+        }
+        configSpy.mockReturnValue({
+          ingress: {
+            privatePort: 9876,
+            privateBaseUrl: "https://private.example.com",
+            publicBaseUrl: "https://public.example.com",
+          },
+        } as ReturnType<typeof loader.getConfig>);
+        expect(
+          await resolveWebhookUrl({ plugin: "example-plugin", path: "events" }),
+        ).toBe(
+          "https://private.example.com/webhooks/plugins/example-plugin/events",
+        );
+      }
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      configSpy.mockRestore();
+    }
+  });
   afterEach(() => {
     mockIsPlatform = false;
   });
