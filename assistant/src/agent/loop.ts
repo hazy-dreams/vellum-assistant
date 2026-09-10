@@ -58,6 +58,10 @@ import {
   applyStreamingSubstitution,
   applySubstitutions,
 } from "../tools/sensitive-output-placeholders.js";
+import {
+  abortedToolResultText,
+  isPreemptedByNewMessage,
+} from "../util/abort-reasons.js";
 import { ProviderError } from "../util/errors.js";
 import { getLogger } from "../util/logger.js";
 import { CompactionCircuit } from "./compaction-circuit.js";
@@ -807,15 +811,24 @@ interface CancelledToolOutcome {
 function cancelledToolOutcomeFor(
   toolUse: ToolUseBlock,
   calls: readonly InFlightToolCall[],
+  texts: {
+    cancelled: string;
+    unsettled: string;
+    /** Whether a synthetic result is an error. A preemption is not. */
+    syntheticIsError?: boolean;
+  } = {
+    cancelled: CANCELLED_TOOL_RESULT,
+    unsettled: CANCELLED_UNSETTLED_TOOL_RESULT,
+  },
 ): CancelledToolOutcome {
   const synthetic = (content: string): CancelledToolOutcome => ({
     toolUse,
     content,
-    isError: true,
+    isError: texts.syntheticIsError ?? true,
   });
   const call = calls.find((candidate) => candidate.toolUse === toolUse);
   if (call === undefined) {
-    return synthetic(CANCELLED_TOOL_RESULT);
+    return synthetic(texts.cancelled);
   }
   if (call.settled) {
     if (call.result !== undefined) {
@@ -827,9 +840,9 @@ function cancelledToolOutcomeFor(
       };
     }
     // The executor rejected, so the tool stopped rather than ran on.
-    return synthetic(CANCELLED_TOOL_RESULT);
+    return synthetic(texts.cancelled);
   }
-  return synthetic(CANCELLED_UNSETTLED_TOOL_RESULT);
+  return synthetic(texts.unsettled);
 }
 
 /**
@@ -2465,12 +2478,16 @@ export class AgentLoop {
         // If already cancelled, synthesize cancelled results and stop. No call
         // was dispatched, so nothing can still be running.
         if (signal?.aborted) {
+          const cancelledText = abortedToolResultText(signal.reason);
+          // A preemption is a handover, not a failure: flagging it as an
+          // error reads to the model as something the user broke.
+          const cancelledIsError = !isPreemptedByNewMessage(signal.reason);
           const cancelledBlocks: ContentBlock[] = toolUseBlocks.map(
             (toolUse) => ({
               type: "tool_result" as const,
               tool_use_id: toolUse.id,
-              content: CANCELLED_TOOL_RESULT,
-              is_error: true,
+              content: cancelledText,
+              is_error: cancelledIsError,
             }),
           );
           history.push({ role: "user", content: cancelledBlocks });
@@ -2478,7 +2495,7 @@ export class AgentLoop {
             await onEvent({
               type: "tool_result",
               toolUseId: toolUse.id,
-              content: CANCELLED_TOOL_RESULT,
+              content: cancelledText,
               isError: true,
               cancelled: true,
             });
@@ -2720,11 +2737,20 @@ export class AgentLoop {
         // Anthropic API (every tool_use must have a matching tool_result).
         if (signal?.aborted) {
           if (toolUseBlocks.length > 0) {
+            const cancelledText = abortedToolResultText(signal.reason);
+            const cancelledIsError = !isPreemptedByNewMessage(signal.reason);
             // Tools that honour the signal settle on the abort; wait briefly so
             // they report their real outcome instead of the hedge below.
             await awaitAbortSettlementGrace(inFlightToolCalls);
             const outcomes = toolUseBlocks.map((toolUse) =>
-              cancelledToolOutcomeFor(toolUse, inFlightToolCalls),
+              cancelledToolOutcomeFor(toolUse, inFlightToolCalls, {
+                cancelled: cancelledText,
+                unsettled:
+                  cancelledText === CANCELLED_TOOL_RESULT
+                    ? CANCELLED_UNSETTLED_TOOL_RESULT
+                    : cancelledText,
+                syntheticIsError: cancelledIsError,
+              }),
             );
             const rawCancelledBlocks: ContentBlock[] = outcomes.map(
               ({ toolUse, content, isError, result }) => ({
