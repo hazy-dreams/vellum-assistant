@@ -420,6 +420,14 @@ export interface BuildSystemPromptOptions {
    */
   conversationId?: string;
   /**
+   * Whether this turn's user-facing text goes through the `send_user_message`
+   * tool. Renders the `01-send-user-message` section. Set by the conversation
+   * for a main-agent turn with the `send-user-message` flag on; every other
+   * prompt build leaves it unset, so the section stays out of the prompt for
+   * subagents, calls, live-voice, and background workers.
+   */
+  sendUserMessageTool?: boolean;
+  /**
    * Whether the turn this prompt serves can actually spawn subagents, one of
    * the two inputs to the parallel-delegation section's gate (the other is
    * whether the turn is channel-delivered, read from `channelCapabilities`).
@@ -534,6 +542,7 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
       options?.canSpawnSubagents === true &&
       !isExternalChannelTurn(options?.channelCapabilities),
     isContainerized: getIsContainerized(),
+    sendUserMessageTool: options?.sendUserMessageTool === true,
     workspaceDir: getWorkspaceDir(),
     userSlug,
     channelSlug,
