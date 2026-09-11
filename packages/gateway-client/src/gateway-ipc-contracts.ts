@@ -473,6 +473,31 @@ export type ListWebhookRoutesIpcResponse = z.infer<
   typeof ListWebhookRoutesIpcResponseSchema
 >;
 
+export const LookupPluginIngressRouteIpcParamsSchema = z.object({
+  plugin: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i),
+  path: z.string().min(1),
+});
+export type LookupPluginIngressRouteIpcParams = z.infer<
+  typeof LookupPluginIngressRouteIpcParamsSchema
+>;
+
+export const LookupPluginIngressRouteIpcResponseSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      status: z.literal("declared"),
+      path: z.string(),
+      kind: z.enum(["http", "websocket"]),
+      exposure: z.enum(["public", "private"]),
+    }),
+    z.object({ status: z.literal("undeclared") }),
+    z.object({ status: z.literal("invalid"), reason: z.string() }),
+  ],
+);
+export type LookupPluginIngressRouteIpcResponse = z.infer<
+  typeof LookupPluginIngressRouteIpcResponseSchema
+>;
+
 // ── classify_risk ────────────────────────────────────────────────────────────
 // Risk classification is gateway-owned; the assistant sends one request per
 // tool invocation and reads the whole answer back. The gateway validates the

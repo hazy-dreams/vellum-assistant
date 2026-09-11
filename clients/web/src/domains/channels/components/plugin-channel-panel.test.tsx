@@ -10,13 +10,20 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 import { PluginChannelPanel } from "@/domains/channels/components/plugin-channel-panel";
 import {
   classifyIngressFailure,
   reportableError,
+  useChannelIngress,
 } from "@/domains/channels/hooks/use-channel-ingress";
 import {
   assistantChannelAdmissionPolicyListQueryKey,
@@ -96,6 +103,52 @@ function renderPanel(sources?: unknown[]) {
 }
 
 describe("PluginChannelPanel", () => {
+  test("reads private ingress paths without public signing fields", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(
+      assistantChannelIngressListQueryKey({
+        path: { assistant_id: ASSISTANT_ID },
+      }),
+      {
+        sources: [
+          {
+            source: "courier",
+            state: "pending",
+            digest: "d".repeat(32),
+            routes: [
+              {
+                path: "events",
+                ingressPath: "/webhooks/plugins/courier/events",
+                exposure: "private",
+                signatureRequired: false,
+                deliversInbound: false,
+              },
+            ],
+          },
+        ],
+        problems: [],
+      },
+    );
+    const { result } = renderHook(
+      () => useChannelIngress(ASSISTANT_ID, "courier"),
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    expect(result.current.paths).toEqual([
+      {
+        path: "/webhooks/plugins/courier/events",
+        approvalGoverned: true,
+        deliversInbound: false,
+      },
+    ]);
+  });
   test("offers approval without listing the routes it opens", () => {
     renderPanel([
       {

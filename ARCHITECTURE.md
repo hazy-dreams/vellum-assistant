@@ -2,7 +2,7 @@
 
 This file is the cross-system architecture index. Detailed designs live in domain docs close to code ownership.
 
-Private plugin HTTP ingress uses a dedicated gateway listener bound to `127.0.0.1`, fronted by Tailscale Serve. Guardian-approved private declarations are excluded from public ingress and general runtime proxy paths. See [private plugin ingress](gateway/ARCHITECTURE.md#private-plugin-http-ingress).
+Private plugin HTTP ingress uses a dedicated gateway listener bound to `127.0.0.1`, fronted by Tailscale Serve. The gateway owns declaration resolution and exposes read-only metadata over IPC. Private declarations are excluded from public ingress and general runtime proxy paths regardless of approval state. See [private plugin ingress](gateway/ARCHITECTURE.md#private-plugin-http-ingress).
 
 ## Architecture Docs
 

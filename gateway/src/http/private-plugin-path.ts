@@ -1,9 +1,19 @@
-import { posix } from "node:path";
+import { existsSync } from "node:fs";
+import { join, posix } from "node:path";
 
-import { discoverPluginIngress } from "../channels/plugin-ingress.js";
+import { resolveHandlerFile } from "@vellumai/service-contracts/route-handler";
+
+import {
+  resolvePluginIngress,
+  type PluginIngressResolution,
+} from "../channels/plugin-ingress-approvals.js";
+import { getWorkspaceDir } from "../paths.js";
 
 /** Blocks the general proxy's aliases of a private handler, including index files. */
-export function isPrivatePluginRuntimePath(pathname: string): boolean {
+export function isPrivatePluginRuntimePath(
+  pathname: string,
+  resolve: () => PluginIngressResolution = resolvePluginIngress,
+): boolean {
   let path: string;
   try {
     path = posix.normalize(decodeURIComponent(pathname));
@@ -17,19 +27,27 @@ export function isPrivatePluginRuntimePath(pathname: string): boolean {
     return false;
   }
   const plugin = match[1]!;
-  const handlerPath = (value: string) =>
-    value.replace(/\/$/, "").replace(/(?:^|\/)index$/, "");
-  const requested = handlerPath(match[2] ?? "");
-  const discovery = discoverPluginIngress();
-  if (discovery.problems.some((problem) => problem.plugin === plugin)) {
+  const resolution = resolve();
+  if (resolution.problems.some((problem) => problem.plugin === plugin)) {
     return true;
   }
-  return discovery.plugins.some(
-    (declaration) =>
-      declaration.plugin === plugin &&
-      declaration.routes.some(
-        (route) =>
-          route.exposure === "private" && handlerPath(route.path) === requested,
-      ),
+  const privateRoutes = [...resolution.approved, ...resolution.pending]
+    .filter((declaration) => declaration.plugin === plugin)
+    .flatMap((declaration) => declaration.routes)
+    .filter((route) => route.exposure === "private");
+  if (privateRoutes.length === 0) {
+    return false;
+  }
+  const routesDir = join(getWorkspaceDir(), "plugins", plugin, "routes");
+  // Runtime may fall back to bundled routes that the gateway cannot inspect.
+  if (!existsSync(routesDir)) {
+    return true;
+  }
+  const requested = resolveHandlerFile(routesDir, match[2] ?? "");
+  if (!requested) {
+    return false;
+  }
+  return privateRoutes.some(
+    (route) => resolveHandlerFile(routesDir, route.path) === requested,
   );
 }

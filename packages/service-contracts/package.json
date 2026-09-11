@@ -12,6 +12,7 @@
     "./credential-rpc": "./src/credential-rpc.ts",
     "./desktop-presence": "./src/desktop-presence.ts",
     "./ingress": "./src/ingress.ts",
+    "./route-handler": "./src/route-handler.ts",
     "./no-response": "./src/no-response.ts",
     "./remote-web-pairing": "./src/remote-web-pairing.ts",
     "./twilio-ingress": "./src/twilio-ingress.ts",

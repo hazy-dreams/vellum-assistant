@@ -42,33 +42,34 @@ const ApprovalViewSchema = z.object({
   approvedAt: z.number(),
 });
 
-const IngressRouteViewSchema = z.object({
+const IngressRouteViewBaseSchema = z.object({
   path: z.string(),
-  /** Absolute path the gateway would serve, which is the reach being granted. */
-  publicPath: z.string(),
+  /** Absolute path on the declared ingress surface. */
+  ingressPath: z.string(),
   kind: z.string(),
-  signer: z.string(),
-  handshake: z.string(),
   description: z.string(),
-  /** Credential the route's signatures are verified against. */
-  credential: z.string(),
-  /**
-   * Whether the gateway serves this route right now. Not implied by the
-   * source's state: a `vellum`-signed route is served without approval.
-   */
+  /** Eligible on its declared surface; does not assert listener availability. */
   served: z.boolean(),
-  /**
-   * Whether this route's replies deliver messages into the assistant, rather
-   * than the route being a callback the plugin merely receives. Approving one
-   * of these grants the plugin a way to start conversations, which is a
-   * different decision than opening an address.
-   */
   deliversInbound: z.boolean(),
-  /** Present when the route declares its own verification scheme. */
-  verification: z
-    .object({ algorithm: z.string(), signatureHeader: z.string() })
-    .optional(),
 });
+
+const IngressRouteViewSchema = z.discriminatedUnion("exposure", [
+  IngressRouteViewBaseSchema.extend({
+    exposure: z.literal("public"),
+    signatureRequired: z.literal(true),
+    publicPath: z.string(),
+    signer: z.string(),
+    handshake: z.string(),
+    credential: z.string(),
+    verification: z
+      .object({ algorithm: z.string(), signatureHeader: z.string() })
+      .optional(),
+  }),
+  IngressRouteViewBaseSchema.extend({
+    exposure: z.literal("private"),
+    signatureRequired: z.literal(false),
+  }),
+]);
 
 const IngressSourceViewSchema = z.object({
   source: z.string(),
@@ -95,7 +96,7 @@ export const ROUTES: GatewayRouteDefinition[] = [
     operationId: "channelIngressList",
     summary: "List ingress declarations and their approval state",
     description:
-      "Every declaration the gateway can see, each with the digest a guardian would approve, the public paths it would open, and the credential its signatures are verified against. This is the only way to learn that a declaration is waiting: on the public surface a route held back by approval 404s exactly like one nobody declared.",
+      "Every declaration the gateway can see, each with the digest a guardian would approve, the exposure and paths it requests, and signing credentials for public routes. This is the only way to learn that a declaration is waiting: on the public surface a route held back by approval 404s exactly like one nobody declared.",
     tags: ["channel-ingress"],
     responseBody: ChannelIngressListSchema,
   },

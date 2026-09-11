@@ -181,8 +181,10 @@ export function useChannelIngress(
     status,
     paths:
       entry?.routes?.map((route) => ({
-        path: route.publicPath,
-        approvalGoverned: route.signer !== "vellum",
+        path:
+          route.exposure === "private" ? route.ingressPath : route.publicPath,
+        approvalGoverned:
+          route.exposure === "private" || route.signer !== "vellum",
         deliversInbound: route.deliversInbound === true,
       })) ?? [],
     deciding: approval.isPending || revocation.isPending,

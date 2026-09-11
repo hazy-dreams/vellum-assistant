@@ -19,6 +19,7 @@ import {
   ipcCallPersistent,
   ipcClassifyRisk,
   ipcGetFeatureFlags,
+  ipcLookupPluginIngressRoute,
   resetPersistentClient,
 } from "./gateway-client.js";
 
@@ -32,6 +33,27 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("ipcCall", () => {
+  test("validates canonical plugin ingress lookup outcomes and fails on IPC errors", async () => {
+    for (const outcome of [
+      { status: "declared", path: "events", kind: "http", exposure: "private" },
+      { status: "undeclared" },
+      { status: "invalid", reason: "Invalid declaration" },
+    ]) {
+      mockGatewayIpc(null, {
+        results: { lookup_plugin_ingress_route: outcome },
+      });
+      expect(
+        await ipcLookupPluginIngressRoute({
+          plugin: "example-plugin",
+          path: "events",
+        }),
+      ).toEqual(outcome);
+    }
+    mockGatewayIpc(null, { error: true });
+    await expect(
+      ipcLookupPluginIngressRoute({ plugin: "example-plugin", path: "events" }),
+    ).rejects.toThrow(/ingress/i);
+  });
   test("delegates to package ipcCall and returns result", async () => {
     mockGatewayIpc(null, {
       results: { test_method: { key: "value" } },

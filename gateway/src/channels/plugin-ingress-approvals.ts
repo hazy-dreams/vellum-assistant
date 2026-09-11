@@ -2,6 +2,8 @@
 
 import { createHash } from "node:crypto";
 
+import type { LookupPluginIngressRouteIpcResponse } from "@vellumai/gateway-client/gateway-ipc-contracts";
+
 import { listPluginIngressApprovals } from "../db/plugin-ingress-approval-store.js";
 import { getLogger } from "../logger.js";
 import { canonicalInbound } from "./ingress-inbound.js";
@@ -176,7 +178,7 @@ function resolveDiscoveredPluginIngress(
 /**
  * The declared route the gateway may serve at `plugin`/`path`, if any.
  *
- * Approval is the general gate, with one exception: a route declaring
+ * Approval is the general gate, with one exception: a public route declaring
  * `signer: "vellum"` is served without it. Such a route only opens to a
  * caller holding the platform's own webhook secret, which is to say us, and
  * the user extended that trust when they connected their account, so asking
@@ -204,27 +206,55 @@ export function findServableRoute(
   plugin: string,
   path: string,
   kind: IngressRouteKind,
+  surface: "public" | "private" = "public",
 ): IngressRoute | undefined {
   const match = findDeclaredRoute(resolution, plugin, path, kind);
-  return match?.servable ? match.route : undefined;
+  if (!match) {
+    return undefined;
+  }
+  const servable =
+    surface === "private"
+      ? isRouteServablePrivate(match.route, match.approved)
+      : isRouteServablePublic(match.route, match.approved);
+  return servable ? match.route : undefined;
 }
 
 /**
  * Whether the gate opens a declared route.
  *
  * `approved` says the route came out of a declaration a guardian has granted,
- * which is the general case. The exception is `signer: "vellum"`, served
+ * which is the general case. The exception is public `signer: "vellum"`, served
  * without a grant for the reason {@link findServableRoute} gives.
  *
- * This is the whole rule, in one place, because two things decide it: the
- * per-request lookup, and {@link listServablePluginWebhookPaths}, which tells
- * the outside world which paths to forward. Were those to disagree, the
- * forwarder would either block a route the gateway serves or advertise one it
- * refuses.
+ * This answers approval eligibility only. Surface helpers additionally check
+ * exposure; public request handlers still verify the caller's signature.
  */
-function isRouteServable(route: IngressRoute, approved: boolean): boolean {
+export function isRouteApprovalEligible(
+  route: IngressRoute,
+  approved: boolean,
+): boolean {
   return (
     approved || (route.exposure !== "private" && route.signer === "vellum")
+  );
+}
+
+export function isRouteServablePublic(
+  route: IngressRoute,
+  approved: boolean,
+): boolean {
+  return (
+    route.exposure !== "private" && isRouteApprovalEligible(route, approved)
+  );
+}
+
+export function isRouteServablePrivate(
+  route: IngressRoute,
+  approved: boolean,
+): boolean {
+  return (
+    route.exposure === "private" &&
+    route.kind === "http" &&
+    isRouteApprovalEligible(route, approved)
   );
 }
 
@@ -242,9 +272,9 @@ export interface ServablePluginWebhookPath {
 /**
  * Every public plugin webhook path the gateway would currently serve.
  *
- * An approved declaration contributes all of its routes; one still awaiting a
- * decision contributes only the routes approval does not gate. Both halves ask
- * {@link isRouteServable}, so this cannot come to describe a different surface
+ * An approved declaration contributes its public routes; one still awaiting a
+ * decision contributes only public routes approval does not gate. Both halves ask
+ * {@link isRouteServablePublic}, so this cannot come to describe a different surface
  * than the one requests are matched against.
  *
  * Each servable route contributes both spellings the gateway answers, with and
@@ -268,7 +298,7 @@ export function listServablePluginWebhookPaths(
   ): void => {
     for (const declaration of declarations) {
       for (const route of declaration.routes) {
-        if (route.exposure !== "private" && isRouteServable(route, approved)) {
+        if (isRouteServablePublic(route, approved)) {
           const path = pluginWebhookPath(declaration.plugin, route.path);
           paths.push({ path, source: declaration.plugin });
           paths.push({ path: `${path}/`, source: declaration.plugin });
@@ -284,7 +314,9 @@ export function listServablePluginWebhookPaths(
 /** A declaration matching the request, and whether the gate opens it. */
 export interface DeclaredRouteMatch {
   route: IngressRoute;
-  /** True where {@link findServableRoute} would return this route. */
+  /** Whether the declaration has a matching guardian grant. */
+  approved: boolean;
+  /** Approval eligibility, independent of exposure or listener availability. */
   servable: boolean;
 }
 
@@ -315,13 +347,35 @@ export function findDeclaredRoute(
   if (fromApproved) {
     return {
       route: fromApproved,
-      servable: isRouteServable(fromApproved, true),
+      approved: true,
+      servable: isRouteApprovalEligible(fromApproved, true),
     };
   }
 
   const pending = resolution.pending.find((d) => d.plugin === plugin);
   const fromPending = pending && matches(pending.routes);
   return fromPending
-    ? { route: fromPending, servable: isRouteServable(fromPending, false) }
+    ? {
+        route: fromPending,
+        approved: false,
+        servable: isRouteApprovalEligible(fromPending, false),
+      }
     : undefined;
+}
+
+/** Declaration metadata is available before approval and without a public registry claim. */
+export function lookupPluginIngressRoute(
+  resolution: PluginIngressResolution,
+  plugin: string,
+  path: string,
+): LookupPluginIngressRouteIpcResponse {
+  const problem = resolution.problems.find((entry) => entry.plugin === plugin);
+  if (problem) {
+    return { status: "invalid", reason: problem.reason };
+  }
+  const declaration = [...resolution.approved, ...resolution.pending].find((entry) => entry.plugin === plugin);
+  const route = declaration?.routes.find((entry) => entry.path === path);
+  return route
+    ? { status: "declared", path: route.path, kind: route.kind, exposure: route.exposure ?? "public" }
+    : { status: "undeclared" };
 }

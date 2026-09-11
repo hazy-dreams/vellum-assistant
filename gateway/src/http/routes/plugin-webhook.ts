@@ -37,6 +37,8 @@ import {
 
 import {
   findDeclaredRoute,
+  isRouteServablePrivate,
+  isRouteServablePublic,
   type PluginIngressResolution,
 } from "../../channels/plugin-ingress-approvals.js";
 import {
@@ -333,9 +335,12 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
     }
     const route = match.route;
     const privateRoute = route.exposure === "private";
+    const servable = privateRoute
+      ? isRouteServablePrivate(route, match.approved)
+      : isRouteServablePublic(route, match.approved);
     if (
       privateRoute !== (deps.listener === "private") ||
-      (privateRoute && !match.servable)
+      (privateRoute && !servable)
     ) {
       return notFound();
     }
@@ -347,12 +352,12 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
     const body = await readLimitedBodyBytes(req, config.maxWebhookPayloadBytes);
     if (body.status === "too_large") {
       log.warn({ plugin, path }, "Plugin webhook payload too large");
-      return match.servable
+      return servable
         ? Response.json({ error: "Payload Too Large" }, { status: 413 })
         : notFound();
     }
     if (body.status === "unreadable") {
-      return match.servable
+      return servable
         ? Response.json({ error: "Bad Request" }, { status: 400 })
         : notFound();
     }
@@ -380,7 +385,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
         { plugin, path, signer: route.signer, secretKey },
         "Plugin webhook secret is not configured, rejecting request",
       );
-      return match.servable
+      return servable
         ? Response.json(
             { error: "Webhook secret not configured" },
             { status: 409 },
@@ -425,7 +430,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
         },
         "Plugin webhook signature verification failed",
       );
-      return match.servable
+      return servable
         ? Response.json({ error: "Forbidden" }, { status: 403 })
         : notFound();
     }
@@ -435,7 +440,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
     // already know it exists; 404ing them here is the answer written for a
     // prober, and it reads as "wrong URL", which sends whoever is debugging to
     // the one thing that is not wrong.
-    if (!match.servable) {
+    if (!servable) {
       log.info(
         { plugin, path, signer: route.signer },
         "Verified delivery to an ingress route awaiting guardian approval",

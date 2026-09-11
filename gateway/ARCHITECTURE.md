@@ -47,15 +47,28 @@ shared plugin handler in private context, retaining the existing body limit
 and internal runtime forwarding. It skips signature verification. The ordinary
 listener rejects private routes, and the general runtime proxy blocks private
 handler paths, including `/x/`, `/v1/x/`, assistant-scoped and index aliases.
+Proxy exclusion includes pending and revoked private declarations. It shares
+the handler-file resolver with runtime dispatch, so a direct file and a nested
+index file remain distinct when both exist.
+When workspace routes are absent for a plugin declaring private ingress, its
+general proxy namespace is blocked because runtime may fall back to bundled
+handlers outside the gateway's filesystem view.
 Invalid declarations fail closed for their plugin's general proxy routes.
 HTTP dispatch reads current declarations so exposure changes do not retain
 public reach through the discovery cache.
 
 Private routes are excluded from the public webhook registry used by Velay.
-Plugin URL resolution reads the declaration before callback registration and
-requires both `ingress.privatePort` and an HTTPS `ingress.privateBaseUrl` for a
-private route. It never falls back to public ingress or managed callbacks.
+Plugin URL resolution reads canonical declaration metadata through the gateway's
+read-only `lookup_plugin_ingress_route` IPC method before callback registration.
+Undeclared, invalid, or unavailable lookup results fail without a public fallback.
+A private URL requires only an HTTPS `ingress.privateBaseUrl`; listener binding
+owns `ingress.privatePort`. Private routes never register managed callbacks.
 The configured URL does not assert listener health or Tailnet reachability.
+
+Approval eligibility is separate from public/private surface eligibility. The
+public surface retains its signature verification and platform-signer approval
+exception. Approval/status responses include exposure, ingress path, and whether
+a signature is required; private routes carry no public path or signing fields.
 
 ```text
 Trusted Tailnet device -> Tailscale Serve -> 127.0.0.1:<privatePort>

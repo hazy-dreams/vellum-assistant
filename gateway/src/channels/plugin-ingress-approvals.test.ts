@@ -21,7 +21,11 @@ import {
   type IngressRoute,
 } from "./plugin-ingress.js";
 import {
+  findDeclaredRoute,
   findServableRoute,
+  isRouteApprovalEligible,
+  isRouteServablePublic,
+  isRouteServablePrivate,
   ingressDeclarationDigest,
   listServablePluginWebhookPaths,
   resolvePluginIngress,
@@ -98,6 +102,38 @@ function route(
 }
 
 describe("ingressDeclarationDigest", () => {
+  it("separates approval from the public and private surfaces", () => {
+    for (const exposure of [undefined, "public", "private"] as const) {
+      for (const signer of ["plugin", "vellum"] as const) {
+        for (const approved of [false, true]) {
+          const declared = route({ path: "events", exposure, signer });
+          const eligible =
+            approved || (exposure !== "private" && signer === "vellum");
+          expect(isRouteApprovalEligible(declared, approved)).toBe(eligible);
+          expect(isRouteServablePublic(declared, approved)).toBe(
+            exposure !== "private" && eligible,
+          );
+          expect(isRouteServablePrivate(declared, approved)).toBe(
+            exposure === "private" && approved,
+          );
+        }
+      }
+    }
+    const declared = route({ path: "events" });
+    const resolution = {
+      approved: [],
+      pending: [
+        { plugin: "example-plugin", digest: "pending", routes: [declared] },
+      ],
+      problems: [],
+    };
+    expect(
+      findDeclaredRoute(resolution, "example-plugin", "events", "http"),
+    ).toMatchObject({ route: declared, servable: false });
+    expect(
+      findServableRoute(resolution, "example-plugin", "events", "http"),
+    ).toBeUndefined();
+  });
   it("includes private exposure while preserving legacy public digests", () => {
     const legacy = route({ path: "events" });
     expect(ingressDeclarationDigest([{ ...legacy, exposure: "public" }])).toBe(
