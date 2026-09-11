@@ -50,7 +50,7 @@ export function ExtensibilityRoutesContent() {
       <DocsContent
         title="Routes"
         breadcrumb="Docs / Extensibility / Routes"
-        subtitle="Expose HTTP endpoints from a plugin. A route is a file the assistant serves in the plugin's own /x/plugins/<name>/ namespace: app frontends, local callers, and the handler behind a public ingress declaration."
+        subtitle="Expose HTTP endpoints from a plugin. A route is a file the assistant serves in the plugin's own /x/plugins/<name>/ namespace: app frontends, local callers, and the handler behind an ingress declaration."
       >
         <p className="mb-8 text-zinc-600 dark:text-zinc-400">
           A route is a file under <code>routes/&lt;path&gt;.ts</code> that
@@ -60,16 +60,17 @@ export function ExtensibilityRoutesContent() {
           <code>routes/</code> directory on disk at request time.
         </p>
         <p className="mb-8 text-zinc-600 dark:text-zinc-400">
-          Public internet webhooks are a different surface. Declare them in{" "}
+          External callers use a separate ingress surface. Declare it in{" "}
           <code>channels/ingress.json</code> (see the{" "}
           <Link href={CHANNELS_PAGE_URL} className={linkClass}>
             Channels page
           </Link>
-          ). The gateway signature-checks those requests and forwards them to
-          the matching route at{" "}
+          ). The declaration selects either signed public exposure or unsigned
+          exposure behind a trusted private network, and the gateway forwards
+          accepted requests to the matching route at{" "}
           <code>/v1/x/plugins/&lt;name&gt;/&lt;path&gt;</code>. A{" "}
-          <code>routes/</code> file with no ingress declaration is not a public
-          webhook. Do not tell a vendor to POST at{" "}
+          <code>routes/</code> file with no ingress declaration is not
+          externally reachable. Do not direct an external caller to{" "}
           <code>/x/plugins/...</code>.
         </p>
 
@@ -90,8 +91,8 @@ export function ExtensibilityRoutesContent() {
             never falls back to a workspace <code>routes/plugins/…</code> file,
             so a plugin can&apos;t collide with workspace routes or with another
             plugin. A path with no matching file returns 404, and a disabled
-            plugin (its <code>.disabled</code> sentinel present) serves no routes
-            even though the files remain on disk.
+            plugin (its <code>.disabled</code> sentinel present) serves no
+            routes even though the files remain on disk.
           </p>
           <p className="mb-0 text-zinc-600 dark:text-zinc-400">
             The same file-based dispatcher also serves standalone workspace
@@ -107,8 +108,8 @@ export function ExtensibilityRoutesContent() {
             Path mapping
           </SectionHeading>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-            The file&apos;s path under <code>routes/</code> becomes the sub-path,
-            minus the extension. Nested directories nest, and an{" "}
+            The file&apos;s path under <code>routes/</code> becomes the
+            sub-path, minus the extension. Nested directories nest, and an{" "}
             <code>index</code> file maps to the directory itself:
           </p>
           <div className="mb-4 overflow-x-auto">
@@ -156,8 +157,8 @@ export function ExtensibilityRoutesContent() {
             <code>GET</code>, <code>POST</code>, <code>PUT</code>,{" "}
             <code>PATCH</code>, <code>DELETE</code>, <code>HEAD</code>,{" "}
             <code>OPTIONS</code>), using the standard Web API{" "}
-            <code>Request</code>/<code>Response</code> signature. A request whose
-            method the file does not export returns 405 with an{" "}
+            <code>Request</code>/<code>Response</code> signature. A request
+            whose method the file does not export returns 405 with an{" "}
             <code>Allow</code> header listing the methods it does.
           </p>
           <pre className="mb-4 overflow-x-auto rounded-lg bg-zinc-900 p-4 text-sm text-zinc-100">
@@ -198,11 +199,11 @@ export async function POST(request: Request): Promise<Response> {
           </SectionHeading>
           <p className="mb-0 text-zinc-600 dark:text-zinc-400">
             Route files are loaded lazily on the first matching request and
-            cached by path + mtime. Editing a route file is picked up on the next
-            request; the dispatcher re-reads it when its mtime changes, so there
-            is no restart or reload step. A handler that throws returns 500; a
-            handler that runs longer than the per-request timeout (30s) returns
-            504.
+            cached by path + mtime. Editing a route file is picked up on the
+            next request; the dispatcher re-reads it when its mtime changes, so
+            there is no restart or reload step. A handler that throws returns
+            500; a handler that runs longer than the per-request timeout (30s)
+            returns 504.
           </p>
         </section>
 
@@ -259,8 +260,8 @@ const data = await res.json();`}</code>
           </pre>
           <p className="mb-0 text-zinc-600 dark:text-zinc-400">
             Authenticated callers (the plugin&apos;s own app, local tools) reach
-            the same route over HTTP. Third-party vendors on the public internet
-            must go through{" "}
+            the same route over HTTP. Callers outside the assistant must go
+            through{" "}
             <Link href={CHANNELS_PAGE_URL} className={linkClass}>
               plugin ingress
             </Link>{" "}
@@ -278,15 +279,15 @@ const data = await res.json();`}</code>
             to call in over HTTP: an app frontend, a local tool, or a status
             endpoint. Unlike a tool (which the model calls) or a hook (which
             fires inside the turn), a route is driven by a caller and runs
-            whenever a request arrives. If the caller is a third party on the
-            public internet, also declare{" "}
+            whenever a request arrives. If the caller is outside the assistant,
+            also declare{" "}
             <Link href={CHANNELS_PAGE_URL} className={linkClass}>
               plugin ingress
             </Link>{" "}
-            so the gateway can signature-check the request before it reaches
-            this handler. Bundle both in a plugin when you want that endpoint to
-            ship, version, and install alongside the plugin&apos;s other
-            surfaces.
+            so the gateway can place the handler on its signed public surface or
+            its trusted private-network surface before a request reaches it.
+            Bundle both in a plugin when you want that endpoint to ship,
+            version, and install alongside the plugin&apos;s other surfaces.
           </p>
         </section>
       </DocsContent>
