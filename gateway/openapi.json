@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Vellum Gateway API",
-    "version": "0.11.8",
+    "version": "0.11.10",
     "description": "Auto-generated OpenAPI specification for the Vellum Gateway HTTP endpoints."
   },
   "servers": [{ "url": "", "description": "Same-origin (gateway)" }],
@@ -353,7 +353,7 @@
         "operationId": "channelIngressList",
         "summary": "List ingress declarations and their approval state",
         "tags": ["channel-ingress"],
-        "description": "Every declaration the gateway can see, each with the digest a guardian would approve, the public paths it would open, and the credential its signatures are verified against. This is the only way to learn that a declaration is waiting: on the public surface a route held back by approval 404s exactly like one nobody declared.",
+        "description": "Every declaration the gateway can see, each with the digest a guardian would approve, the exposure and paths it requests, and signing credentials for public routes. This is the only way to learn that a declaration is waiting: on the public surface a route held back by approval 404s exactly like one nobody declared.",
         "responses": {
           "200": {
             "description": "Successful response",
@@ -378,39 +378,89 @@
                           "routes": {
                             "type": "array",
                             "items": {
-                              "type": "object",
-                              "properties": {
-                                "path": { "type": "string" },
-                                "publicPath": { "type": "string" },
-                                "kind": { "type": "string" },
-                                "signer": { "type": "string" },
-                                "handshake": { "type": "string" },
-                                "description": { "type": "string" },
-                                "credential": { "type": "string" },
-                                "served": { "type": "boolean" },
-                                "deliversInbound": { "type": "boolean" },
-                                "verification": {
+                              "oneOf": [
+                                {
                                   "type": "object",
                                   "properties": {
-                                    "algorithm": { "type": "string" },
-                                    "signatureHeader": { "type": "string" }
+                                    "path": { "type": "string" },
+                                    "ingressPath": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "served": { "type": "boolean" },
+                                    "deliversInbound": { "type": "boolean" },
+                                    "exposure": {
+                                      "type": "string",
+                                      "const": "public"
+                                    },
+                                    "signatureRequired": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
+                                    "publicPath": { "type": "string" },
+                                    "signer": { "type": "string" },
+                                    "handshake": { "type": "string" },
+                                    "credential": { "type": "string" },
+                                    "verification": {
+                                      "type": "object",
+                                      "properties": {
+                                        "algorithm": { "type": "string" },
+                                        "signatureHeader": { "type": "string" }
+                                      },
+                                      "required": [
+                                        "algorithm",
+                                        "signatureHeader"
+                                      ],
+                                      "additionalProperties": false
+                                    }
                                   },
-                                  "required": ["algorithm", "signatureHeader"],
+                                  "required": [
+                                    "path",
+                                    "ingressPath",
+                                    "kind",
+                                    "description",
+                                    "served",
+                                    "deliversInbound",
+                                    "exposure",
+                                    "signatureRequired",
+                                    "publicPath",
+                                    "signer",
+                                    "handshake",
+                                    "credential"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "path": { "type": "string" },
+                                    "ingressPath": { "type": "string" },
+                                    "kind": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "served": { "type": "boolean" },
+                                    "deliversInbound": { "type": "boolean" },
+                                    "exposure": {
+                                      "type": "string",
+                                      "const": "private"
+                                    },
+                                    "signatureRequired": {
+                                      "type": "boolean",
+                                      "const": false
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "ingressPath",
+                                    "kind",
+                                    "description",
+                                    "served",
+                                    "deliversInbound",
+                                    "exposure",
+                                    "signatureRequired"
+                                  ],
                                   "additionalProperties": false
                                 }
-                              },
-                              "required": [
-                                "path",
-                                "publicPath",
-                                "kind",
-                                "signer",
-                                "handshake",
-                                "description",
-                                "credential",
-                                "served",
-                                "deliversInbound"
                               ],
-                              "additionalProperties": false
+                              "type": "object"
                             }
                           }
                         },

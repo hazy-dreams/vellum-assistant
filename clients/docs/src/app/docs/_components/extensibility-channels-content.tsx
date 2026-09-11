@@ -9,8 +9,17 @@ import { TableOfContents } from "@/app/docs/_components/table-of-contents";
 const TOC_ITEMS = [
   { id: "the-declaration", label: "The declaration", level: 2 },
   { id: "route-fields", label: "Route fields", level: 3 },
-  { id: "approval-and-signatures", label: "Approval and signatures", level: 2 },
-  { id: "third-party-verification", label: "Third-party verification", level: 2 },
+  {
+    id: "exposure-approval-and-signatures",
+    label: "Exposure, approval, and signatures",
+    level: 2,
+  },
+  { id: "private-exposure", label: "Private exposure", level: 3 },
+  {
+    id: "third-party-verification",
+    label: "Third-party verification",
+    level: 2,
+  },
   { id: "inbound-messages", label: "Delivering inbound messages", level: 2 },
   { id: "presentation", label: "Presentation", level: 2 },
   { id: "anatomy-of-a-channel", label: "Anatomy of a channel", level: 2 },
@@ -40,25 +49,36 @@ const ROUTE_FIELDS: FieldRow[] = [
     field: "path",
     required: "yes",
     fallback: "",
-    notes: 'Relative to the plugin\'s own namespace ("events", not /webhooks/plugins/my-plugin/events). No leading slash, no trailing slash, no query or fragment, no . or .. segments, and canonical (unencoded, no empty or redundant segments).',
+    notes:
+      'Relative to the plugin\'s own namespace ("events", not /webhooks/plugins/my-plugin/events). No leading slash, no trailing slash, no query or fragment, no . or .. segments, and canonical (unencoded, no empty or redundant segments).',
   },
   {
     field: "kind",
     required: "yes",
     fallback: "",
-    notes: '"http" or "websocket". The gateway bridges the two differently, so the kind has to be known before a connection arrives.',
+    notes:
+      '"http" or "websocket". The gateway bridges the two differently, so the kind has to be known before a connection arrives.',
   },
   {
     field: "description",
     required: "yes",
     fallback: "",
-    notes: "Human-readable purpose, surfaced in gateway logs and the approval UI.",
+    notes:
+      "Human-readable purpose, surfaced in gateway logs and the approval UI.",
+  },
+  {
+    field: "exposure",
+    required: "no",
+    fallback: '"public"',
+    notes:
+      '"public" uses the signed webhook surface. "private" uses the dedicated loopback listener for a trusted private network and supports HTTP only.',
   },
   {
     field: "handshake",
     required: "no",
     fallback: '"signed-headers"',
-    notes: 'Where the caller carries its signature. "signed-headers" (default) puts it in request headers. "signed-query" puts the same HMAC in the URL, WebSocket only, for a caller that is handed a URL and nothing else.',
+    notes:
+      'Where the caller carries its signature. "signed-headers" (default) puts it in request headers. "signed-query" puts the same HMAC in the URL, WebSocket only, for a caller that is handed a URL and nothing else.',
   },
   {
     field: "verification",
@@ -70,7 +90,8 @@ const ROUTE_FIELDS: FieldRow[] = [
     field: "inbound",
     required: "no",
     fallback: "webhook only",
-    notes: "That this route's replies carry inbound messages, and how to read them. HTTP only.",
+    notes:
+      "That this route's replies carry inbound messages, and how to read them. HTTP only.",
   },
 ];
 
@@ -80,14 +101,14 @@ export function ExtensibilityChannelsContent() {
       <DocsContent
         title="Channels"
         breadcrumb="Docs / Extensibility / Channels"
-        subtitle="Make a route reachable from the public internet. A plugin is a channel because it declares ingress: channels/ingress.json is the list of routes the outside world may reach it on."
+        subtitle="Expose plugin routes through a controlled ingress surface. channels/ingress.json declares which handlers external callers may reach and whether they use public or private exposure."
       >
         <p className="mb-8 text-zinc-600 dark:text-zinc-400">
-          The gateway owns the public surface: it validates the declaration,
-          signature-checks every request, and holds{" "}
-          <code>plugin</code>-signed routes behind a guardian&apos;s approval.
-          Plugins that declare a channel ingress are considered themselves a
-          channel in all contexts where channels are viewed.
+          The gateway owns both ingress surfaces. It validates each declaration,
+          keeps access behind the applicable approval and network boundary, and
+          forwards accepted requests to the matching plugin handler. Plugins
+          that declare channel ingress are considered themselves a channel in
+          all contexts where channels are viewed.
         </p>
 
         <section id="the-declaration">
@@ -95,16 +116,18 @@ export function ExtensibilityChannelsContent() {
             The declaration
           </SectionHeading>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-            <code>channels/ingress.json</code> is a JSON object with a
-            non-empty <code>routes</code> array. The plugin&apos;s identity
-            comes from its directory, not from the file, so a manifest cannot
-            claim to belong to a different plugin. Declare the public path in{" "}
+            <code>channels/ingress.json</code> is a JSON object with a non-empty{" "}
+            <code>routes</code> array. The plugin&apos;s identity comes from its
+            directory, not from the file, so a manifest cannot claim to belong
+            to a different plugin. Declare the ingress path in{" "}
             <code>ingress.json</code> <strong>and</strong> implement the
             matching handler under{" "}
             <Link href={ROUTES_PAGE_URL} className={linkClass}>
               <code>routes/</code>
             </Link>{" "}
-            at the same relative path.
+            at the same relative path. Routes use public exposure by default;
+            set <code>exposure</code> only when the caller belongs on the
+            private surface.
           </p>
           <pre className="mb-4 overflow-x-auto rounded-lg bg-zinc-900 p-4 text-sm text-zinc-100">
             <code>{`{
@@ -118,15 +141,14 @@ export function ExtensibilityChannelsContent() {
 }`}</code>
           </pre>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-            That route is served at{" "}
-            <code>/webhooks/plugins/&lt;plugin-name&gt;/events</code> and
-            handled by <code>routes/events.ts</code>. Resolve the URL to
-            hand a vendor with{" "}
-            <code>resolveWebhookUrl({"{ path: \"events\" }"})</code> from{" "}
+            That route is handled by <code>routes/events.ts</code> and served at
+            the path <code>/webhooks/plugins/&lt;plugin-name&gt;/events</code>
+            on its declared exposure. Resolve the URL to hand a caller with{" "}
+            <code>resolveWebhookUrl({'{ path: "events" }'})</code> from{" "}
             <Link href={PLUGIN_API_URL} className={linkClass}>
               <code>@vellumai/plugin-api</code>
             </Link>
-            . Do not hardcode a hostname. Do not tell a vendor to POST at{" "}
+            . Do not hardcode a hostname or send an external caller to{" "}
             <code>/x/plugins/...</code>.
           </p>
 
@@ -179,27 +201,83 @@ export function ExtensibilityChannelsContent() {
           </div>
         </section>
 
-        <section id="approval-and-signatures" className="mt-12">
-          <SectionHeading id="approval-and-signatures" level={2}>
-            Approval and signatures
+        <section id="exposure-approval-and-signatures" className="mt-12">
+          <SectionHeading id="exposure-approval-and-signatures" level={2}>
+            Exposure, approval, and signatures
           </SectionHeading>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-            Every public plugin route is signature-checked. An unsigned plugin
-            route does not exist. A route whose signing secret is missing is
+            Public routes accept internet-facing webhook traffic and are always
+            signature-checked. A public route whose signing secret is missing is
             refused rather than served unsigned, and an unauthenticated probe
             sees <code>404</code> whether the route is undeclared, pending, or
             missing a secret.
           </p>
-          <p className="mb-0 text-zinc-600 dark:text-zinc-400">
-            A guardian has to approve the declaration before the gateway serves
-            it. The approval covers a digest of the declaration: adding a
-            route, changing transport, handshake, verification, or inbound
-            delivery drops the plugin back to pending. Rewording{" "}
-            <code>description</code> does not. Editing the file and reinstalling
-            is not enough; the guardian has to approve the new digest. Ask the
-            user to approve pending ingress from the channels settings once the
-            plugin is installed. A plugin must not approve its own ingress.
+          <p className="mb-4 text-zinc-600 dark:text-zinc-400">
+            Private routes are unsigned because their access boundary is the
+            trusted private network in front of a dedicated loopback-only
+            listener. They are not registered on the public webhook surface, and
+            the gateway does not expose the same handler through its general
+            <code>/x/plugins/...</code> route. Approval never changes a private
+            route into a public one.
           </p>
+          <p className="mb-8 text-zinc-600 dark:text-zinc-400">
+            Plugin-signed public routes and all private routes require guardian
+            approval before the gateway serves them. Approval covers a digest of
+            the declaration: adding a route or changing its transport, exposure,
+            signer, handshake, verification, or inbound delivery drops it back
+            to pending. Rewording <code>description</code> does not. Ask the
+            user to approve pending ingress from channels settings after
+            installation. A plugin must not approve its own ingress.
+          </p>
+
+          <div id="private-exposure">
+            <SectionHeading id="private-exposure" level={3}>
+              Private exposure
+            </SectionHeading>
+            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
+              Use private exposure when every permitted caller is already
+              authenticated by a trusted private network, such as a Tailnet:
+            </p>
+            <pre className="mb-4 overflow-x-auto rounded-lg bg-zinc-900 p-4 text-sm text-zinc-100">
+              <code>{`{
+  "routes": [
+    {
+      "path": "events",
+      "kind": "http",
+      "exposure": "private",
+      "description": "Events from a private-network client"
+    }
+  ]
+}`}</code>
+            </pre>
+            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
+              Configure the loopback listener and the HTTPS URL callers use:
+            </p>
+            <pre className="mb-4 overflow-x-auto rounded-lg bg-zinc-900 p-4 text-sm text-zinc-100">
+              <code>{`{
+  "ingress": {
+    "privatePort": 8788,
+    "privateBaseUrl": "https://assistant.example.com"
+  }
+}`}</code>
+            </pre>
+            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
+              The gateway binds <code>privatePort</code> to
+              <code>127.0.0.1</code>. Configure Tailscale Serve, or an
+              equivalent trusted private proxy, to terminate HTTPS and forward
+              to <code>http://127.0.0.1:8788</code>. The
+              <code>privateBaseUrl</code> is the external HTTPS origin returned
+              by <code>resolveWebhookUrl</code>. Changing the listener port
+              requires a gateway restart.
+            </p>
+            <p className="mb-0 text-zinc-600 dark:text-zinc-400">
+              Vellum does not add bearer or HMAC authentication on this surface;
+              any caller admitted by the private network may send requests.
+              Private declarations support HTTP ingress routes only. They cannot
+              declare WebSockets, signed-query handshakes, custom verification,
+              or inbound-message policy.
+            </p>
+          </div>
         </section>
 
         <section id="third-party-verification" className="mt-12">
@@ -208,8 +286,9 @@ export function ExtensibilityChannelsContent() {
           </SectionHeading>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
             A vendor that signs <code>X-Example-Signature</code> has its own
-            scheme. Declare <code>verification</code> so the gateway runs one
-            HMAC engine and reads the vendor&apos;s specifics as data:
+            scheme. On a public HTTP route, declare <code>verification</code>
+            so the gateway runs one HMAC engine and reads the vendor&apos;s
+            specifics as data:
           </p>
           <pre className="mb-4 overflow-x-auto rounded-lg bg-zinc-900 p-4 text-sm text-zinc-100">
             <code>{`{
@@ -271,9 +350,9 @@ export function ExtensibilityChannelsContent() {
             Delivering inbound messages
           </SectionHeading>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-            Absent <code>inbound</code>, the route is a webhook and nothing
-            more: the gateway forwards the delivery, returns whatever the plugin
-            answered, and the message goes no further.
+            On a public HTTP route, absent <code>inbound</code>, the route is a
+            webhook and nothing more: the gateway forwards the delivery, returns
+            whatever the plugin answered, and the message goes no further.
           </p>
           <p className="mb-4 text-zinc-600 dark:text-zinc-400">
             Present, the plugin&apos;s <strong>reply</strong> is normalized and
@@ -393,16 +472,16 @@ export async function POST(request: Request): Promise<Response> {
             When should my assistant write a Channel?
           </SectionHeading>
           <p className="mb-0 text-zinc-600 dark:text-zinc-400">
-            Reach for <code>channels/ingress.json</code> when a third party must
-            deliver to the assistant from outside: a vendor webhook, a realtime
-            socket a third party dials, or a channel that should appear next to
-            Slack and Telegram. Use a{" "}
+            Reach for <code>channels/ingress.json</code> when an external caller
+            must reach a plugin handler: a public vendor webhook, a client on a
+            trusted private network, a realtime socket a third party dials, or a
+            channel that should appear next to Slack and Telegram. Use a{" "}
             <Link href={ROUTES_PAGE_URL} className={linkClass}>
               route
             </Link>{" "}
             alone when the caller is already inside the assistant (an app
             frontend, a local tool, another plugin). After install, hand the
-            vendor <code>await resolveWebhookUrl({"{ path: \"events\" }"})</code>{" "}
+            caller <code>await resolveWebhookUrl({'{ path: "events" }'})</code>{" "}
             and ask the guardian to approve the pending ingress from channels
             settings.
           </p>

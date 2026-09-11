@@ -137,7 +137,7 @@ export function createPluginWebhookWebsocketHandler(deps: PluginWebhookWsDeps) {
 
     let route: ReturnType<typeof findServableRoute>;
     try {
-      route = findServableRoute(resolve(), plugin, path, "websocket");
+      route = findServableRoute(resolve(), plugin, path, "websocket", "public");
     } catch (err) {
       log.error({ err, plugin }, "Failed to resolve plugin ingress");
       return new Response("Internal Server Error", { status: 500 });

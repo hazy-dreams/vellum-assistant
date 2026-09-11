@@ -1,5 +1,7 @@
 /**
- * Public URL resolution for a plugin's own ingress route.
+ * URL resolution for a plugin's declared ingress route.
+ * Private declarations use privateBaseUrl; public declarations use the
+ * callback resolution below. Exposure is resolved by the gateway over IPC.
  *
  * A plugin that receives third-party webhooks has to tell the vendor where to
  * deliver. Which URL is correct depends on how the assistant is reachable:
@@ -18,8 +20,10 @@ import { createHash } from "node:crypto";
 
 import { getIsPlatform } from "../config/env-registry.js";
 import { getConfig } from "../config/loader.js";
+import { IngressConfigSchema } from "../config/schemas/ingress.js";
 import { resolveCallbackUrl } from "../inbound/platform-callback-registration.js";
 import { getPublicBaseUrl } from "../inbound/public-ingress-urls.js";
+import { ipcLookupPluginIngressRoute } from "../ipc/gateway-client.js";
 import { getCurrentPluginName } from "../plugins/plugin-execution-context.js";
 
 /**
@@ -111,7 +115,7 @@ function withTrailingSlash(url: string): string {
 }
 
 /**
- * Resolve the public URL a third party should deliver to for `path`.
+ * Resolve a URL on the declared public or private surface for `path`.
  *
  * On the managed branches this registers a callback route with the platform,
  * which is idempotent and matches what `assistant webhooks register` does.
@@ -141,6 +145,25 @@ export async function resolveWebhookUrl(
   }
 
   const callbackPath = `${PLUGIN_WEBHOOK_PREFIX}/${plugin}/${path}`;
+
+  const declaration = await ipcLookupPluginIngressRoute({ plugin, path });
+  if (declaration.status === "invalid") {
+    throw new Error(
+      `Invalid plugin ingress declaration: ${declaration.reason}`,
+    );
+  }
+  if (declaration.status === "undeclared") {
+    throw new Error(`Plugin webhook path is not declared: "${path}"`);
+  }
+  if (declaration.exposure === "private") {
+    const ingress = IngressConfigSchema.safeParse({
+      privateBaseUrl: getConfig().ingress.privateBaseUrl,
+    });
+    if (!ingress.success || !ingress.data.privateBaseUrl) {
+      throw new Error("Private ingress requires ingress.privateBaseUrl");
+    }
+    return `${ingress.data.privateBaseUrl.replace(/\/+$/, "")}/${callbackPath}`;
+  }
 
   let ingressUrl: string | undefined;
   const resolved = await resolveCallbackUrl(

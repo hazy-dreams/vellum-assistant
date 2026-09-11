@@ -40,6 +40,7 @@ import {
   createChannelIngressListHandler,
   createChannelIngressRevokeHandler,
 } from "./channel-ingress.js";
+import { ROUTES as channelIngressRoutes } from "./channel-ingress-routes.js";
 
 const created: string[] = [];
 let workspaceDir = "";
@@ -114,6 +115,39 @@ afterEach(() => {
 });
 
 describe("approve", () => {
+  it("reports private exposure without public paths or signing credentials", async () => {
+    writePlugin("meeting-bot", [
+      {
+        path: "events",
+        kind: "http",
+        exposure: "private",
+        description: "Private events",
+      },
+    ]);
+    const res = await list();
+    const body = await res.json();
+    expect(() =>
+      channelIngressRoutes
+        .find((route) => route.operationId === "channelIngressList")!
+        .responseBody!.parse(body),
+    ).not.toThrow();
+    const route = body.sources[0].routes[0];
+    expect(route).toMatchObject({
+      exposure: "private",
+      ingressPath: "/webhooks/plugins/meeting-bot/events",
+      signatureRequired: false,
+      served: false,
+    });
+    for (const field of [
+      "publicPath",
+      "signer",
+      "handshake",
+      "credential",
+      "verification",
+    ]) {
+      expect(route).not.toHaveProperty(field);
+    }
+  });
   it("records an approval for the declaration the plugin currently makes", async () => {
     writePlugin("meeting-bot");
     const digest = ingressDeclarationDigest(ROUTES);
@@ -452,6 +486,9 @@ describe("list", () => {
         routes: [
           {
             path: "realtime",
+            ingressPath: "/webhooks/plugins/meeting-bot/realtime",
+            exposure: "public",
+            signatureRequired: true,
             publicPath: "/webhooks/plugins/meeting-bot/realtime",
             kind: "websocket",
             signer: "plugin",

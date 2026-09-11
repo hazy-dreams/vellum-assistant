@@ -18,6 +18,7 @@ import { fetchImpl } from "../../fetch.js";
 import { getLogger } from "../../logger.js";
 import { isLoopbackAddress } from "../../util/is-loopback-address.js";
 import { tryIpcProxy } from "./ipc-runtime-proxy.js";
+import { isPrivatePluginRuntimePath } from "../private-plugin-path.js";
 
 const log = getLogger("runtime-proxy");
 
@@ -79,6 +80,12 @@ export function createRuntimeProxyHandler(config: GatewayConfig) {
   return async (req: Request, clientIp?: string): Promise<Response> => {
     const start = performance.now();
     const url = new URL(req.url);
+    if (isPrivatePluginRuntimePath(url.pathname)) {
+      return Response.json(
+        { error: "Not found", source: "gateway" },
+        { status: 404 },
+      );
+    }
 
     // Block forwarding of /webhooks/* paths — these are gateway-only.
     if (WEBHOOK_PATH_RE.test(url.pathname)) {

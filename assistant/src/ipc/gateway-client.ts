@@ -15,6 +15,9 @@ import {
   type ClassifyRiskIpcResponse,
   ClassifyRiskIpcResponseSchema,
   ListWebhookRoutesIpcResponseSchema,
+  LookupPluginIngressRouteIpcResponseSchema,
+  type LookupPluginIngressRouteIpcParams,
+  type LookupPluginIngressRouteIpcResponse,
   type RegisterWebhookRouteIpcParams,
   RegisterWebhookRouteIpcResponseSchema,
   UnregisterWebhookRouteIpcResponseSchema,
@@ -274,6 +277,19 @@ export async function ipcListWebhookRoutes(): Promise<IpcListWebhookRoutesResult
     return webhookRouteFailure("ipcListWebhookRoutes", result);
   }
   return { ok: true, routes: parsed.data.routes };
+}
+
+export async function ipcLookupPluginIngressRoute(
+  params: LookupPluginIngressRouteIpcParams,
+): Promise<LookupPluginIngressRouteIpcResponse> {
+  const result = await ipcCall("lookup_plugin_ingress_route", params);
+  const parsed = LookupPluginIngressRouteIpcResponseSchema.safeParse(result);
+  if (!parsed.success) {
+    throw new Error(
+      "Unable to resolve plugin ingress declaration through the gateway",
+    );
+  }
+  return parsed.data;
 }
 
 // classify_risk is an idempotent, side-effect-free read, so a transient gateway

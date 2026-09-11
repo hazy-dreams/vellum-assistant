@@ -164,12 +164,16 @@ import {
   createChannelIngressRevokeHandler,
 } from "./http/routes/channel-ingress.js";
 import { createPluginWebhookHandler } from "./http/routes/plugin-webhook.js";
+import { startPrivatePluginListener } from "./http/private-plugin-listener.js";
 import {
   createPluginWebhookWebsocketHandler,
   getPluginWebhookWebsocketHandlers,
   isPluginWebhookSocketData,
 } from "./http/routes/plugin-webhook-websocket.js";
-import { resolveCachedPluginIngress } from "./channels/plugin-ingress-approvals.js";
+import {
+  resolveCachedPluginIngress,
+  resolvePluginIngress,
+} from "./channels/plugin-ingress-approvals.js";
 import {
   reconcilePluginWebhookRoutes,
   watchPluginIngressForWebhookRoutes,
@@ -252,6 +256,7 @@ import { trustRulesRoutes } from "./ipc/trust-rules-handlers.js";
 import { riskClassificationRoutes } from "./ipc/risk-classification-handlers.js";
 import { createVelayRoutes } from "./ipc/velay-handlers.js";
 import { createWebhookRouteRoutes } from "./ipc/webhook-route-handlers.js";
+import { createPluginIngressRoutes } from "./ipc/plugin-ingress-handlers.js";
 import { refreshRouteSchema } from "./ipc/route-schema-cache.js";
 import { initGatewayDb } from "./db/connection.js";
 import { cleanupExpiredInboundEvents } from "./db/inbound-dedup-store.js";
@@ -692,7 +697,7 @@ async function main() {
   const handleChannelIngressRevoke = createChannelIngressRevokeHandler();
   const handlePluginWebhook = createPluginWebhookHandler({
     config,
-    resolve: resolveCachedPluginIngress,
+    resolve: resolvePluginIngress,
     credentials: credentialCache,
     // HMAC payloads can sign the public request URL. Read through the cache
     // so a tunnel registering a public base is picked up without a restart.
@@ -2368,6 +2373,22 @@ async function main() {
 
   logAuthBypassState();
 
+  let privatePluginServer: ReturnType<typeof startPrivatePluginListener> =
+    undefined;
+  try {
+    privatePluginServer = startPrivatePluginListener(
+      configFileCache.getNumber("ingress", "privatePort"),
+      createPluginWebhookHandler({
+        config,
+        resolve: resolvePluginIngress,
+        credentials: undefined,
+        listener: "private",
+      }),
+    );
+  } catch (err) {
+    log.error({ err }, "Private plugin ingress listener could not bind");
+  }
+
   // Start periodic background cleanup for dedup caches
   telegramDedupCache.startCleanup();
   whatsappDedupCache.startCleanup();
@@ -3021,6 +3042,7 @@ async function main() {
     ...trustRulesRoutes,
     ...createVelayRoutes(velayTunnelClient),
     ...createWebhookRouteRoutes(),
+    ...createPluginIngressRoutes(),
     ...createCredentialRequestIpcRoutes(
       config,
       configFileCache,
@@ -3118,6 +3140,7 @@ async function main() {
   process.on("SIGTERM", () => {
     log.info("SIGTERM received, starting graceful shutdown");
     draining = true;
+    privatePluginServer?.stop(true);
     const shutdownTasks: Promise<void>[] = [];
     sleepWakeDetector.stop();
     backupWorkerHandle.stop();

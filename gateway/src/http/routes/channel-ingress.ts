@@ -99,44 +99,38 @@ function verificationView(verification: IngressVerification): {
   };
 }
 
-/**
- * One route, as the guardian needs to read it.
- *
- * `publicPath` is what would open on the public surface, which is the reach
- * being granted and is not otherwise derivable without knowing how the gateway
- * composes it. `credential` names the secret the route verifies against, so a
- * declaration approved but 409ing on a missing secret is diagnosable from the
- * same view. The verification descriptor is summarised rather than echoed
- * whole: the algorithm, the header a signature arrives in, and which credential
- * keys it are what a decision turns on.
- *
- * `served` is answered by asking `findServableRoute` the same question the
- * request path asks, rather than by restating its rule. A `signer: "vellum"`
- * route is served out of a pending declaration, so approval state alone does
- * not say whether a route is live, and a listing that reimplemented the
- * exception could come to disagree with the surface it describes.
- *
- * `deliversInbound` is the difference between a route that receives a callback
- * and one that starts conversations. They are not the same grant and a guardian
- * deciding about the second should be told so, so it is reported rather than
- * left to be inferred from a `description` the plugin wrote.
- */
+/** Approval eligibility and the exposure/signing semantics the guardian is granting. */
 function routeView(
   resolution: PluginIngressResolution,
   plugin: string,
   route: IngressRoute,
 ) {
-  return {
+  const exposure = route.exposure ?? "public";
+  const common = {
     path: route.path,
-    publicPath: pluginWebhookPath(plugin, route.path),
+    ingressPath: pluginWebhookPath(plugin, route.path),
     kind: route.kind,
-    signer: route.signer,
-    handshake: route.handshake,
     description: route.description,
     served:
-      findServableRoute(resolution, plugin, route.path, route.kind) !==
-      undefined,
+      findServableRoute(
+        resolution,
+        plugin,
+        route.path,
+        route.kind,
+        exposure,
+      ) !== undefined,
     deliversInbound: route.inbound !== undefined,
+  };
+  if (exposure === "private") {
+    return { ...common, exposure, signatureRequired: false };
+  }
+  return {
+    ...common,
+    exposure,
+    signatureRequired: true,
+    publicPath: common.ingressPath,
+    signer: route.signer,
+    handshake: route.handshake,
     credential: route.verification
       ? credentialKey(plugin, route.verification.secret.field)
       : credentialKey(

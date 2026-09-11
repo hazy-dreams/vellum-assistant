@@ -8,7 +8,17 @@
  * registration type it derives, and what it refuses.
  */
 
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
+
+import { mockGatewayIpc, resetMockGatewayIpc } from "./mock-gateway-ipc.js";
 
 let mockIsPlatform = false;
 
@@ -28,8 +38,96 @@ const { runInPluginContext } =
   await import("../plugins/plugin-execution-context.js");
 
 describe("resolveWebhookUrl", () => {
+  beforeEach(() => {
+    mockGatewayIpc(null, {
+      results: {
+        lookup_plugin_ingress_route: {
+          status: "declared",
+          exposure: "public",
+          path: "events",
+          kind: "http",
+        },
+      },
+    });
+  });
+  test("private declarations resolve only a configured private URL, never public callbacks", async () => {
+    mockGatewayIpc(null, {
+      results: {
+        lookup_plugin_ingress_route: {
+          status: "declared",
+          exposure: "private",
+          path: "events",
+          kind: "http",
+        },
+      },
+    });
+    const configSpy = spyOn(loader, "getConfig");
+    const spy = spyOn(registration, "resolveCallbackUrl").mockResolvedValue(
+      "https://public.example.com/events",
+    );
+    try {
+      for (const isPlatform of [false, true]) {
+        mockIsPlatform = isPlatform;
+        for (const privateConfig of [
+          {},
+          { privatePort: 9876 },
+          { privatePort: 9876, privateBaseUrl: "invalid" },
+          { privatePort: 9876, privateBaseUrl: "http://private.example.com" },
+        ]) {
+          configSpy.mockReturnValue({
+            ingress: {
+              publicBaseUrl: "https://public.example.com",
+              ...privateConfig,
+            },
+          } as ReturnType<typeof loader.getConfig>);
+          await expect(
+            resolveWebhookUrl({ plugin: "example-plugin", path: "events" }),
+          ).rejects.toThrow(/Private ingress/);
+        }
+        configSpy.mockReturnValue({
+          ingress: {
+            privateBaseUrl: "https://private.example.com",
+            publicBaseUrl: "https://public.example.com",
+          },
+        } as ReturnType<typeof loader.getConfig>);
+        expect(
+          await resolveWebhookUrl({ plugin: "example-plugin", path: "events" }),
+        ).toBe(
+          "https://private.example.com/webhooks/plugins/example-plugin/events",
+        );
+      }
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      configSpy.mockRestore();
+    }
+  });
   afterEach(() => {
     mockIsPlatform = false;
+    resetMockGatewayIpc();
+  });
+  test("never registers a public callback for missing, invalid, or unavailable declarations", async () => {
+    const spy = spyOn(registration, "resolveCallbackUrl").mockResolvedValue(
+      "https://public.example.com/events",
+    );
+    try {
+      for (const outcome of [
+        { status: "undeclared" },
+        { status: "invalid", reason: "Invalid declaration" },
+        undefined,
+        { status: "declared", exposure: "unknown" },
+      ]) {
+        mockGatewayIpc(null, {
+          results: { lookup_plugin_ingress_route: outcome },
+        });
+        await expect(
+          resolveWebhookUrl({ plugin: "example-plugin", path: "events" }),
+        ).rejects.toThrow();
+      }
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
   test("composes the plugin's namespaced path and delegates the tier choice", async () => {
     const spy = spyOn(registration, "resolveCallbackUrl").mockResolvedValue(

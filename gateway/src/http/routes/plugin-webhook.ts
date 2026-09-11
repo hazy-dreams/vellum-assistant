@@ -37,6 +37,8 @@ import {
 
 import {
   findDeclaredRoute,
+  isRouteServablePrivate,
+  isRouteServablePublic,
   type PluginIngressResolution,
 } from "../../channels/plugin-ingress-approvals.js";
 import {
@@ -244,7 +246,10 @@ async function notifyPluginAdmissionDenied(opts: {
     );
     const response = await proxyForwardToResponse(noticeReq, {
       baseUrl: forward.config.assistantRuntimeBaseUrl,
-      path: pluginRouteUpstreamPath(plugin, PLUGIN_ADMISSION_DENIED_NOTICE_PATH),
+      path: pluginRouteUpstreamPath(
+        plugin,
+        PLUGIN_ADMISSION_DENIED_NOTICE_PATH,
+      ),
       serviceToken: mintServiceToken(),
       timeoutMs: forward.config.runtimeTimeoutMs,
       fetchImpl: forward.fetchImpl,
@@ -265,7 +270,9 @@ async function notifyPluginAdmissionDenied(opts: {
 
 export interface PluginWebhookHandlerDeps {
   config: GatewayConfig;
-  /** Approved-ingress view; cached by the caller so this stays off the disk. */
+  /** Selected by the server, never by request headers or network identity. */
+  listener?: "public" | "private";
+  /** Current declaration and guardian approval view. */
   resolve: () => PluginIngressResolution;
   /** Signing secrets, read through the TTL cache so rotation is picked up. */
   credentials: CredentialCache | undefined;
@@ -327,6 +334,16 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
       return notFound();
     }
     const route = match.route;
+    const privateRoute = route.exposure === "private";
+    const servable = privateRoute
+      ? isRouteServablePrivate(route, match.approved)
+      : isRouteServablePublic(route, match.approved);
+    if (
+      privateRoute !== (deps.listener === "private") ||
+      (privateRoute && !servable)
+    ) {
+      return notFound();
+    }
 
     // Cap the body on the streamed bytes before anything forwards it. The
     // caller is unauthenticated and Content-Length is attacker-controlled
@@ -335,14 +352,26 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
     const body = await readLimitedBodyBytes(req, config.maxWebhookPayloadBytes);
     if (body.status === "too_large") {
       log.warn({ plugin, path }, "Plugin webhook payload too large");
-      return match.servable
+      return servable
         ? Response.json({ error: "Payload Too Large" }, { status: 413 })
         : notFound();
     }
     if (body.status === "unreadable") {
-      return match.servable
+      return servable
         ? Response.json({ error: "Bad Request" }, { status: 400 })
         : notFound();
+    }
+
+    if (privateRoute) {
+      return forwardToPlugin({
+        config,
+        plugin,
+        routePath: route.path,
+        req,
+        body: body.bytes,
+        search: new URL(req.url).search,
+        fetchImpl,
+      });
     }
 
     // Signature check before the forward, and fail-closed when no secret is
@@ -356,7 +385,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
         { plugin, path, signer: route.signer, secretKey },
         "Plugin webhook secret is not configured, rejecting request",
       );
-      return match.servable
+      return servable
         ? Response.json(
             { error: "Webhook secret not configured" },
             { status: 409 },
@@ -401,7 +430,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
         },
         "Plugin webhook signature verification failed",
       );
-      return match.servable
+      return servable
         ? Response.json({ error: "Forbidden" }, { status: 403 })
         : notFound();
     }
@@ -411,7 +440,7 @@ export function createPluginWebhookHandler(deps: PluginWebhookHandlerDeps) {
     // already know it exists; 404ing them here is the answer written for a
     // prober, and it reads as "wrong URL", which sends whoever is debugging to
     // the one thing that is not wrong.
-    if (!match.servable) {
+    if (!servable) {
       log.info(
         { plugin, path, signer: route.signer },
         "Verified delivery to an ingress route awaiting guardian approval",
@@ -480,9 +509,7 @@ async function deliverGatedInbound(opts: {
   const { config, plugin, routePath, req, body } = forward;
 
   let parsed: unknown;
-  const contentType = (
-    req.headers.get("content-type") ?? ""
-  ).toLowerCase();
+  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
   if (contentType.includes("application/x-www-form-urlencoded")) {
     // A form-encoded delivery (Twilio's webhooks are always this shape).
     // Parsed into a flat record so the inbound declaration's field paths can
