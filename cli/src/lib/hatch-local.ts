@@ -163,19 +163,6 @@ export interface HatchLocalResult {
   guardianAccessToken?: string;
 }
 
-function formatFailedHatchRecovery(
-  instanceName: string,
-  provider: string | null | undefined,
-): string {
-  return (
-    `After fixing the startup error, run \`vellum wake ${instanceName} --repair-guardian\`, then \`vellum use ${instanceName}\`.\n` +
-    (provider
-      ? `If your provider requires an API key, finish setup with \`vellum setup --provider ${provider}\`.\n`
-      : "") +
-    "Guardian repair revokes existing device tokens; clients may need to authenticate again."
-  );
-}
-
 export async function hatchLocal(
   species: Species,
   name: string | null,
@@ -203,8 +190,7 @@ export async function hatchLocal(
       if (existing && (!existing.cloud || existing.cloud === "local")) {
         throw new Error(
           `An assistant named "${instanceName}" is already hatched.\n` +
-            `Run \`vellum wake ${instanceName}\` to restart it, or \`vellum retire ${instanceName}\` to remove it first.\n` +
-            `If its first startup never completed:\n${formatFailedHatchRecovery(instanceName, "<provider>")}`,
+            `Run \`vellum wake\` to restart it, or \`vellum retire ${instanceName}\` to remove it first.`,
         );
       }
 
@@ -266,18 +252,6 @@ export async function hatchLocal(
       const signingKey = generateLocalSigningKey();
       const bootstrapSecret = generateLocalSigningKey();
       let runtimeUrl = `http://127.0.0.1:${resources.gatewayPort}`;
-      const localEntry: AssistantEntry = {
-        assistantId: instanceName,
-        runtimeUrl,
-        localUrl: `http://127.0.0.1:${resources.gatewayPort}`,
-        cloud: "local",
-        species,
-        hatchedAt: new Date().toISOString(),
-        resources: { ...resources, signingKey },
-        guardianBootstrapSecret: bootstrapSecret,
-      };
-
-      saveAssistantEntry(localEntry);
       try {
         // Launch the CES sibling alongside the daemon, in parallel — matching the
         // Docker topology. The assistant does not spawn its own CES, so a freshly
@@ -308,19 +282,25 @@ export async function hatchLocal(
         });
       } catch (error) {
         reporter.error(
-          `\n❌ Local assistant startup failed. Stopping partial processes.`,
+          `\n❌ Local assistant startup failed — stopping partial processes.`,
         );
         await stopLocalProcesses(resources);
-        throw new Error(
-          `${error instanceof Error ? error.message : String(error)}\n` +
-            `The assistant's saved identity was kept.\n${formatFailedHatchRecovery(instanceName, provider)}`,
-          { cause: error },
-        );
+        throw error;
       }
 
       const loopbackUrl = `http://127.0.0.1:${resources.gatewayPort}`;
+      const localEntry: AssistantEntry = {
+        assistantId: instanceName,
+        runtimeUrl,
+        localUrl: `http://127.0.0.1:${resources.gatewayPort}`,
+        cloud: "local",
+        species,
+        hatchedAt: new Date().toISOString(),
+        resources: { ...resources, signingKey },
+        guardianBootstrapSecret: bootstrapSecret,
+      };
+
       reporter.progress(5, 6, "Saving configuration...");
-      localEntry.runtimeUrl = runtimeUrl;
       saveAssistantEntry(localEntry);
       setActiveAssistant(instanceName);
 

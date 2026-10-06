@@ -82,6 +82,3 @@ jobs:
       - name: Local lifecycle continuity tests
         working-directory: cli
         run: bun test src/__tests__/wake.test.ts src/__tests__/wake-error.test.ts src/__tests__/upgrade-local.test.ts src/__tests__/recover.test.ts
-      - name: Initial identity persistence tests
-        working-directory: cli
-        run: bun test src/__tests__/hatch-auth-continuity.test.ts

@@ -590,9 +590,9 @@ function resolveDaemonMainPath(assistantIndex: string): string {
  *
  * Both the daemon and gateway must use the same HMAC signing key so JWT
  * tokens minted by one can be verified by the other. The CLI generates
- * a key at hatch, persists it in the host entry before launch, and passes
- * it as `ACTOR_TOKEN_SIGNING_KEY` to both processes. Lifecycle resumes
- * resolve the existing identity rather than generating a key.
+ * a key at hatch and passes it as `ACTOR_TOKEN_SIGNING_KEY` to both
+ * processes. Lifecycle resumes resolve the existing identity rather than
+ * generating a key.
  */
 export function generateLocalSigningKey(): string {
   return randomBytes(32).toString("hex");
