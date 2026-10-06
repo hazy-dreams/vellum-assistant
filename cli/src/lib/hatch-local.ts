@@ -163,6 +163,19 @@ export interface HatchLocalResult {
   guardianAccessToken?: string;
 }
 
+function formatFailedHatchRecovery(
+  instanceName: string,
+  provider: string | null | undefined,
+): string {
+  return (
+    `After fixing the startup error, run \`vellum wake ${instanceName} --repair-guardian\`, then \`vellum use ${instanceName}\`.\n` +
+    (provider
+      ? `If your provider requires an API key, finish setup with \`vellum setup --provider ${provider}\`.\n`
+      : "") +
+    "Guardian repair revokes existing device tokens; clients may need to authenticate again."
+  );
+}
+
 export async function hatchLocal(
   species: Species,
   name: string | null,
@@ -190,7 +203,8 @@ export async function hatchLocal(
       if (existing && (!existing.cloud || existing.cloud === "local")) {
         throw new Error(
           `An assistant named "${instanceName}" is already hatched.\n` +
-            `Run \`vellum wake\` to restart it, or \`vellum retire ${instanceName}\` to remove it first.`,
+            `Run \`vellum wake ${instanceName}\` to restart it, or \`vellum retire ${instanceName}\` to remove it first.\n` +
+            `If its first startup never completed:\n${formatFailedHatchRecovery(instanceName, "<provider>")}`,
         );
       }
 
@@ -294,10 +308,14 @@ export async function hatchLocal(
         });
       } catch (error) {
         reporter.error(
-          `\n❌ Local assistant startup failed — stopping partial processes.`,
+          `\n❌ Local assistant startup failed. Stopping partial processes.`,
         );
         await stopLocalProcesses(resources);
-        throw error;
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}\n` +
+            `The assistant's saved identity was kept.\n${formatFailedHatchRecovery(instanceName, provider)}`,
+          { cause: error },
+        );
       }
 
       const loopbackUrl = `http://127.0.0.1:${resources.gatewayPort}`;
