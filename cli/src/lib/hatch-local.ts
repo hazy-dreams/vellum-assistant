@@ -252,6 +252,18 @@ export async function hatchLocal(
       const signingKey = generateLocalSigningKey();
       const bootstrapSecret = generateLocalSigningKey();
       let runtimeUrl = `http://127.0.0.1:${resources.gatewayPort}`;
+      const localEntry: AssistantEntry = {
+        assistantId: instanceName,
+        runtimeUrl,
+        localUrl: `http://127.0.0.1:${resources.gatewayPort}`,
+        cloud: "local",
+        species,
+        hatchedAt: new Date().toISOString(),
+        resources: { ...resources, signingKey },
+        guardianBootstrapSecret: bootstrapSecret,
+      };
+
+      saveAssistantEntry(localEntry);
       try {
         // Launch the CES sibling alongside the daemon, in parallel — matching the
         // Docker topology. The assistant does not spawn its own CES, so a freshly
@@ -289,18 +301,8 @@ export async function hatchLocal(
       }
 
       const loopbackUrl = `http://127.0.0.1:${resources.gatewayPort}`;
-      const localEntry: AssistantEntry = {
-        assistantId: instanceName,
-        runtimeUrl,
-        localUrl: `http://127.0.0.1:${resources.gatewayPort}`,
-        cloud: "local",
-        species,
-        hatchedAt: new Date().toISOString(),
-        resources: { ...resources, signingKey },
-        guardianBootstrapSecret: bootstrapSecret,
-      };
-
       reporter.progress(5, 6, "Saving configuration...");
+      localEntry.runtimeUrl = runtimeUrl;
       saveAssistantEntry(localEntry);
       setActiveAssistant(instanceName);
 
