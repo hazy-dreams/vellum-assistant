@@ -20,6 +20,7 @@ import {
   probeDaemonReadinessWithRetry,
   waitForDaemonMigrationsReady,
 } from "../lib/http-client.js";
+import { findOpenPort } from "../lib/port-allocator.js";
 import {
   DAEMON_STOP_TIMEOUT_MS,
   isProcessAlive,
@@ -147,9 +148,13 @@ export async function wake(): Promise<void> {
   // A replacement must reach both processes. Stop them before saving it so
   // retries cannot attach to a surviving process that still uses the old key.
   if (replacingSigningKey) {
-    for (const [file, label] of [
-      [join(resources.instanceDir, ".vellum", "gateway.pid"), "gateway"],
-      [getDaemonPidPath(resources), "assistant"],
+    for (const [file, label, port] of [
+      [
+        join(resources.instanceDir, ".vellum", "gateway.pid"),
+        "gateway",
+        resources.gatewayPort,
+      ],
+      [getDaemonPidPath(resources), "assistant", resources.daemonPort],
     ] as const) {
       const stopped = await stopProcessByPidFile(
         file,
@@ -160,6 +165,14 @@ export async function wake(): Promise<void> {
       if (!stopped && isProcessAlive(file).alive) {
         throw new Error(
           `Cannot repair authentication: ${label} could not be stopped. Stop it and retry the same repair command; no replacement key was saved.`,
+        );
+      }
+      // A missing PID file does not prove the service has released its port.
+      try {
+        await findOpenPort(port, { maxAttempts: 1, host: "127.0.0.1" });
+      } catch {
+        throw new Error(
+          `Cannot repair authentication: could not confirm that ${label} port ${port} is free. Stop any process using it, then retry the same repair command; no replacement key was saved.`,
         );
       }
     }

@@ -22,6 +22,7 @@ import * as local from "../lib/local.js";
 import * as nginxIngress from "../lib/nginx-ingress.js";
 import * as ngrok from "../lib/ngrok.js";
 import * as processLib from "../lib/process.js";
+import * as portAllocator from "../lib/port-allocator.js";
 import type { AssistantEntry } from "../lib/assistant-config.js";
 
 const realAssistantConfig = { ...assistantConfig };
@@ -30,6 +31,7 @@ const realGuardianToken = { ...guardianToken };
 const realLocal = { ...local };
 const realNgrok = { ...ngrok };
 const realProcessLib = { ...processLib };
+const realPortAllocator = { ...portAllocator };
 
 const resolveTargetAssistantMock =
   mock<typeof assistantConfig.resolveTargetAssistant>();
@@ -112,6 +114,15 @@ mock.module("../lib/process", () => ({
   resolveProcessState: resolveProcessStateMock,
   stopProcessByPidFile: stopProcessByPidFileMock,
   isProcessAlive: isProcessAliveMock,
+}));
+
+const findOpenPortMock = mock<typeof portAllocator.findOpenPort>(
+  async (port) => port,
+);
+
+mock.module("../lib/port-allocator.js", () => ({
+  ...realPortAllocator,
+  findOpenPort: findOpenPortMock,
 }));
 
 const generateLocalSigningKeyMock = mock<typeof local.generateLocalSigningKey>(
@@ -252,6 +263,8 @@ beforeEach(() => {
   );
   stopProcessByPidFileMock.mockReset();
   stopProcessByPidFileMock.mockResolvedValue(true);
+  findOpenPortMock.mockReset();
+  findOpenPortMock.mockImplementation(async (port) => port);
   generateLocalSigningKeyMock.mockReset();
   generateLocalSigningKeyMock.mockReturnValue("generated-bootstrap-secret");
   isAssistantWatchModeAvailableMock.mockReset();
@@ -316,6 +329,7 @@ afterAll(() => {
   mock.module("../lib/docker.js", () => realDocker);
   mock.module("../lib/guardian-token.js", () => realGuardianToken);
   mock.module("../lib/process", () => realProcessLib);
+  mock.module("../lib/port-allocator.js", () => realPortAllocator);
   mock.module("../lib/local", () => realLocal);
   mock.module("../lib/ngrok", () => realNgrok);
   mock.module("../lib/ingress-config.js", () => realIngressConfig);
@@ -473,6 +487,7 @@ describe("vellum wake", () => {
     ];
     isProcessAliveMock.mockReturnValue({ alive: true, pid: 123 });
     await wake();
+    expect(findOpenPortMock).not.toHaveBeenCalled();
     expect(generateLocalSigningKeyMock).not.toHaveBeenCalled();
     expect(stopProcessByPidFileMock).not.toHaveBeenCalled();
     expect(startLocalDaemonMock).not.toHaveBeenCalled();
@@ -493,6 +508,92 @@ describe("vellum wake", () => {
     stopProcessByPidFileMock.mockResolvedValue(false);
     isProcessAliveMock.mockReturnValue({ alive: true, pid: 123 });
     await expect(wake()).rejects.toThrow("could not be stopped");
+    expect(saveAssistantEntryMock).not.toHaveBeenCalled();
+    expect(startLocalDaemonMock).not.toHaveBeenCalled();
+    expect(startGatewayMock).not.toHaveBeenCalled();
+    expect(leaseGuardianTokenMock).not.toHaveBeenCalled();
+  });
+
+  for (const [portField, label] of [
+    ["daemonPort", "assistant"],
+    ["gatewayPort", "gateway"],
+  ] as const) {
+    test(`repair refuses an untracked ${label} listener before saving a key and can retry after it stops`, async () => {
+      delete localEntry.resources!.signingKey;
+      localEntry.guardianBootstrapSecret = "existing-bootstrap";
+      process.argv = [
+        "bun",
+        "vellum",
+        "wake",
+        "local-assistant",
+        "--repair-guardian",
+      ];
+      const orphan = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: () => new Response("not ready", { status: 503 }),
+      });
+      const port = orphan.port!;
+      localEntry.resources![portField] = port;
+      stopProcessByPidFileMock.mockImplementation(
+        realProcessLib.stopProcessByPidFile,
+      );
+      findOpenPortMock.mockImplementation((candidate, options) =>
+        candidate === port
+          ? realPortAllocator.findOpenPort(candidate, options)
+          : Promise.resolve(candidate),
+      );
+      generateLocalSigningKeyMock.mockReturnValue("ef".repeat(32));
+      resolveProcessStateMock.mockResolvedValue({
+        status: "needs_start",
+        pid: null,
+      });
+      startLocalDaemonMock.mockImplementation(async () => {
+        expect(saveAssistantEntryMock).toHaveBeenCalled();
+        isProcessAliveMock.mockReturnValue({ alive: true, pid: 123 });
+      });
+      try {
+        await expect(wake()).rejects.toThrow(
+          `could not confirm that ${label} port ${port} is free`,
+        );
+        expect(localEntry.resources!.signingKey).toBeUndefined();
+        expect(saveAssistantEntryMock).not.toHaveBeenCalled();
+        expect(startLocalDaemonMock).not.toHaveBeenCalled();
+        expect(startGatewayMock).not.toHaveBeenCalled();
+        expect(leaseGuardianTokenMock).not.toHaveBeenCalled();
+        expect(findOpenPortMock).toHaveBeenCalledWith(port, {
+          maxAttempts: 1,
+          host: "127.0.0.1",
+        });
+        expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(
+          503,
+        );
+        await orphan.stop(true);
+        await wake();
+        expect(localEntry.resources).toMatchObject({
+          signingKey: "ef".repeat(32),
+        });
+        expect(startLocalDaemonMock).toHaveBeenCalledTimes(1);
+        expect(startGatewayMock).toHaveBeenCalledTimes(1);
+        expect(leaseGuardianTokenMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await orphan.stop(true);
+      }
+    });
+  }
+
+  test("repair refuses to save a replacement key when a port cannot be checked", async () => {
+    delete localEntry.resources!.signingKey;
+    process.argv = [
+      "bun",
+      "vellum",
+      "wake",
+      "local-assistant",
+      "--repair-guardian",
+    ];
+    findOpenPortMock.mockRejectedValue(new Error("EPERM"));
+    await expect(wake()).rejects.toThrow("no replacement key was saved");
+    expect(localEntry.resources!.signingKey).toBeUndefined();
     expect(saveAssistantEntryMock).not.toHaveBeenCalled();
     expect(startLocalDaemonMock).not.toHaveBeenCalled();
     expect(startGatewayMock).not.toHaveBeenCalled();
