@@ -32,7 +32,7 @@ function fakeProvider(name: string) {
 beforeEach(() => setConfig("llm", {}));
 
 describe("Claude subscription transport routing", () => {
-  test("an unavailable SDK connection never falls back to a paid default", async () => {
+  test("an unavailable SDK connection uses the existing default-transport fallback", async () => {
     setConfig("llm", {
       defaultProvider: {
         provider: "claude-agent-sdk",
@@ -42,18 +42,19 @@ describe("Claude subscription transport routing", () => {
     const paid = fakeProvider("anthropic");
     const resolver = mock(async () => null);
     const routing = new CallSiteRoutingProvider(paid, resolver);
-    await expect(
-      routing.sendMessage(messages, { config: { callSite: "memoryRouter" } }),
-    ).rejects.toThrow("No fallback provider was used");
+    const result = await routing.sendMessage(messages, {
+      config: { callSite: "memoryRouter" },
+    });
+    expect(result.model).toBe("anthropic");
     expect(resolver).toHaveBeenCalledWith(
       "sdk-connection",
       "claude-agent-sdk",
       "haiku",
     );
-    expect(paid.sendMessage).not.toHaveBeenCalled();
+    expect(paid.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  test("an SDK entry alias also fails closed when its adapter is unavailable", async () => {
+  test("an unavailable SDK entry alias uses the existing default-transport fallback", async () => {
     const alias = `sdk-alias-${randomUUID()}`;
     expect(
       createConnection(getDb(), {
@@ -72,11 +73,12 @@ describe("Claude subscription transport routing", () => {
     const paid = fakeProvider("anthropic");
     const resolver = mock(async () => null);
     const routing = new CallSiteRoutingProvider(paid, resolver);
-    await expect(
-      routing.sendMessage(messages, { config: { callSite: "memoryRouter" } }),
-    ).rejects.toThrow("No fallback provider was used");
+    const result = await routing.sendMessage(messages, {
+      config: { callSite: "memoryRouter" },
+    });
+    expect(result.model).toBe("anthropic");
     expect(resolver).toHaveBeenCalledWith(alias, "claude-agent-sdk", "opus");
-    expect(paid.sendMessage).not.toHaveBeenCalled();
+    expect(paid.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test("successful SDK auxiliary routing and failed inference never hit the paid default", async () => {
@@ -112,7 +114,7 @@ describe("Claude subscription transport routing", () => {
     expect(sdk.sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  test("an unavailable explicit API choice never silently uses the SDK default", async () => {
+  test("an unavailable API connection uses the SDK default transport", async () => {
     setConfig("llm", {
       defaultProvider: {
         provider: "claude-agent-sdk",
@@ -130,10 +132,11 @@ describe("Claude subscription transport routing", () => {
     });
     const sdk = fakeProvider("claude-agent-sdk");
     const routing = new CallSiteRoutingProvider(sdk, async () => null);
-    await expect(
-      routing.sendMessage(messages, { config: { callSite: "memoryRouter" } }),
-    ).rejects.toThrow("No fallback provider was used");
-    expect(sdk.sendMessage).not.toHaveBeenCalled();
+    const result = await routing.sendMessage(messages, {
+      config: { callSite: "memoryRouter" },
+    });
+    expect(result.model).toBe("claude-agent-sdk");
+    expect(sdk.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test("explicit API call-site and per-request profile pins remain authoritative", async () => {

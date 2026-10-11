@@ -2579,7 +2579,7 @@
   },
   "claudeAgentSdkSettings": {
     "description": "Uses the Claude Agent SDK with your existing Claude Code sign-in. Install Claude Code and sign in with your Claude subscription on the same computer that runs this assistant. Vellum does not start a login or ask for a token.",
-    "billing": "Uses your Claude subscription limits. It will not switch to paid API credits if the subscription is unavailable. The default applies to requests without an override. Existing chat-profile and background-task overrides keep their selected providers. Claude Agent SDK does not provide embeddings. Memory embeddings keep their separately configured backend and may incur API or managed-service charges.",
+    "billing": "Uses your Claude subscription limits and ordinary retries. Check your profile and fallback settings; separate services and API overrides may incur charges. The default applies to requests without an override. Existing chat-profile and background-task overrides keep their selected providers. Claude Agent SDK does not provide embeddings. Memory embeddings keep their separately configured backend and may incur API or managed-service charges.",
     "pathLabel": "Claude Code executable path (optional)",
     "pathPlaceholder": "Automatic discovery",
     "pathHint": "Leave blank to find Claude Code automatically. Otherwise enter the absolute path to the installed Claude Code executable on the assistant’s computer. This setting is shared by all Claude subscription profiles.",

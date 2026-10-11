@@ -233,7 +233,7 @@ export class CallSiteRoutingProvider implements Provider {
    *      that connection's auth. Hard config errors propagate as throws.
    *      Soft credential failures fall back to the default Provider so
    *      a transient credential blip does not take a conversation
-   *      offline. Routes into or out of Claude subscription fail closed.
+   *      offline.
    *   3. No `provider_connection` → auto-resolve a connection for the
    *      resolved provider and route through it. This runs even when the
    *      provider matches the default's name: the default transport may
@@ -328,13 +328,9 @@ export class CallSiteRoutingProvider implements Provider {
       // The vendor guard covers both the entry route and a config carrying
       // an entry label alongside an explicit provider_connection: a label
       // that is not a vendor never threads into the row-equality check.
-      const expectedProvider = expectedVendorProvider(
-        resolved.provider,
-        resolved.model,
-      );
       const connectionProvider = await this.resolveByConnection(
         connectionName,
-        expectedProvider,
+        expectedVendorProvider(resolved.provider, resolved.model),
         resolved.model,
       );
       if (connectionProvider) {
@@ -359,18 +355,6 @@ export class CallSiteRoutingProvider implements Provider {
           ...actualRoute,
           ...(profileName ? { profileName } : {}),
         };
-      }
-      if (
-        expectedProvider === "claude-agent-sdk" ||
-        this.defaultProvider.name === "claude-agent-sdk"
-      ) {
-        throw new ProviderError(
-          expectedProvider === "claude-agent-sdk"
-            ? "Claude subscription connection is unavailable. Check its local Claude Code sign-in and connection settings. No fallback provider was used."
-            : "The selected inference connection is unavailable. No fallback provider was used.",
-          expectedProvider ?? resolved.provider,
-          400,
-        );
       }
       // Soft credential failure: the routed connection yielded no usable
       // adapter and dispatch is landing on the default transport, which may

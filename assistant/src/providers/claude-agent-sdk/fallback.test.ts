@@ -1,224 +1,149 @@
-import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
+import { z } from "zod";
 
 import { setConfig } from "../../__tests__/helpers/set-config.js";
-import { getDb } from "../../persistence/db-connection.js";
 import { initializeDb } from "../../persistence/db-init.js";
 import { ProviderError } from "../../util/errors.js";
-import { CallSiteRoutingProvider } from "../call-site-routing.js";
+import { DEFAULT_MAX_RETRIES } from "../../util/retry.js";
 import {
   recordFallbackServed,
   resetFallbackBreaker,
-  shouldSkipPrimary,
 } from "../fallback-breaker.js";
-import { createConnection } from "../inference/connections.js";
+import { createAdapterFromConnection } from "../inference/adapter-factory.js";
+import type { ProviderConnection } from "../inference/auth.js";
 import { RetryProvider } from "../retry.js";
-import type {
-  Message,
-  Provider,
-  ProviderResponse,
-  SendMessageOptions,
-} from "../types.js";
-import { ClaudeAgentSdkProvider, type ClaudeSdkQuery } from "./client.js";
+import type { Message, ProviderResponse } from "../types.js";
+import { UsageTrackingProvider } from "../usage-tracking.js";
+import { ClaudeAgentSdkProvider } from "./client.js";
 
 await initializeDb();
 
+const connection: ProviderConnection = {
+  name: "claude-subscription",
+  provider: "claude-agent-sdk",
+  auth: { type: "none" },
+  label: null,
+  baseUrl: null,
+  models: null,
+  createdAt: 1,
+  updatedAt: 1,
+  isManaged: false,
+};
 const messages: Message[] = [
   { role: "user", content: [{ type: "text", text: "Example request" }] },
 ];
 const response: ProviderResponse = {
-  content: [{ type: "text", text: "API response" }],
-  model: "claude-sonnet-4-6",
+  content: [{ type: "text", text: "Example response" }],
+  model: "haiku",
   usage: { inputTokens: 1, outputTokens: 1 },
   stopReason: "end_turn",
 };
+let restoreSend = () => {};
 
 beforeEach(() => {
   resetFallbackBreaker();
   setConfig("llm", {
     defaultProvider: {
       provider: "claude-agent-sdk",
-      connectionName: "subscription",
-    },
-    profiles: {
-      "api-primary": {
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        provider_connection: "api-primary",
-        source: "user",
-      },
-      "paid-backup": {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        provider_connection: "paid-backup",
-        source: "user",
-      },
+      connectionName: connection.name,
     },
   });
 });
-afterEach(() => resetFallbackBreaker());
+afterEach(() => {
+  restoreSend();
+  resetFallbackBreaker();
+});
 
-function fixture(error: Error, failAtLaunch = false) {
-  const close = mock(() => {});
-  const query = mock<ClaudeSdkQuery>(() => {
-    if (failAtLaunch) {
-      throw error;
-    }
-    return {
-      close,
-      async *[Symbol.asyncIterator]() {
-        yield* [];
-        throw error;
-      },
-    };
-  });
-  const sdk = new ClaudeAgentSdkProvider("sonnet", {
-    executablePath: "/usr/local/bin/claude",
-    query,
-    preflight: async ({ executablePath }) => ({
-      ok: true,
-      executablePath,
-      env: {},
-    }),
-  });
-  const paidSend = mock(async () => response);
-  const paid: Provider = { name: "anthropic", sendMessage: paidSend };
-  const fallback = mock(async () => ({
-    provider: paid,
-    overrideProfile: "paid-backup",
-    forwardUsageAttributionHeaders: false,
-  }));
-  const retry = new RetryProvider(sdk, { resolveFallbackRoute: fallback });
-  return { retry, query, close, fallback, paidSend };
+function fixture() {
+  // Stub the leaf only: adapter construction and retry/usage wrappers are real.
+  const send = spyOn(ClaudeAgentSdkProvider.prototype, "sendMessage");
+  restoreSend = () => send.mockRestore();
+  send.mockResolvedValue(response);
+  const adapter = createAdapterFromConnection(
+    connection,
+    { kind: "none" },
+    { model: "haiku" },
+  );
+  if (!adapter) {
+    throw new Error("Expected a Claude subscription adapter");
+  }
+  return { adapter, send };
 }
 
-describe("Claude subscription retry boundary", () => {
-  for (const [name, error, failAtLaunch] of [
-    ["SDK launch", new Error("Failed to start Claude Code"), true],
-    ["SDK iterator", new Error("stream terminated prematurely"), false],
-    [
-      "SDK rate limit",
-      new ProviderError("Rate limited", "claude-agent-sdk", 429),
-      false,
-    ],
-    [
-      "SDK unavailable",
-      new ProviderError("Service unavailable", "claude-agent-sdk", 503),
-      false,
-    ],
-  ] as const) {
-    test(`${name} failure never resolves or invokes a paid backup`, async () => {
-      const f = fixture(error, failAtLaunch);
-      await expect(
-        f.retry.sendMessage(messages, {
-          config: { callSite: "conversationTitle" },
-        }),
-      ).rejects.toBe(error);
-      expect(f.query).toHaveBeenCalledTimes(1);
-      expect(f.fallback).not.toHaveBeenCalled();
-      expect(f.paidSend).not.toHaveBeenCalled();
-      expect(f.close).toHaveBeenCalledTimes(failAtLaunch ? 0 : 1);
-    });
-  }
-
-  test("an open fallback breaker cannot bypass the selected SDK route", async () => {
-    recordFallbackServed({ upstream: "claude-agent-sdk" });
+describe("Claude subscription no-auth retry wiring", () => {
+  test("uses ordinary retry and usage wrappers without managed escalation hooks", () => {
+    const { adapter } = fixture();
+    expect(adapter).toBeInstanceOf(UsageTrackingProvider);
+    const { inner: retry } = z
+      .object({ inner: z.instanceof(RetryProvider) })
+      .parse(adapter);
     expect(
-      shouldSkipPrimary({ upstream: "claude-agent-sdk", model: "haiku" }),
+      z
+        .object({
+          inner: z.instanceof(ClaudeAgentSdkProvider),
+          options: z.object({
+            credentialSource: z.literal("no-auth"),
+            connectionName: z.literal(connection.name),
+            forwardUsageAttributionHeaders: z.literal(false),
+            refreshCredentialProvider: z.undefined(),
+            resolveFallbackRoute: z.undefined(),
+          }),
+        })
+        .safeParse(retry).success,
     ).toBe(true);
-    const error = new ProviderError("Rate limited", "claude-agent-sdk", 429);
-    const f = fixture(error);
-    await expect(
-      f.retry.sendMessage(messages, {
-        config: { callSite: "conversationTitle" },
-      }),
-    ).rejects.toBe(error);
-    expect(f.query).toHaveBeenCalledTimes(1);
-    expect(f.fallback).not.toHaveBeenCalled();
-    expect(f.paidSend).not.toHaveBeenCalled();
   });
 
-  test("an API default routes an SDK entry alias without any paid fallback", async () => {
-    const alias = `sdk-retry-alias-${randomUUID()}`;
-    expect(
-      createConnection(getDb(), {
-        name: alias,
-        provider: "claude-agent-sdk",
-        auth: { type: "none" },
-      }).ok,
-    ).toBe(true);
-    setConfig("llm", {
-      defaultProvider: { provider: "anthropic" },
-      profiles: {
-        subscription: { provider: alias, model: "haiku", source: "user" },
-        "paid-backup": {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          source: "user",
-        },
-      },
-      callSites: { conversationTitle: { profile: "subscription" } },
-    });
-    const primarySend = mock(async () => response);
-    const primary: Provider = { name: "anthropic", sendMessage: primarySend };
-    const error = new ProviderError("Rate limited", "claude-agent-sdk", 429);
-    const f = fixture(error);
-    const routing = new CallSiteRoutingProvider(primary, async () => f.retry);
-    recordFallbackServed({ upstream: "claude-agent-sdk" });
-    await expect(
-      routing.sendMessage(messages, {
-        config: { callSite: "conversationTitle" },
+  test("retries a transient subscription failure on the same adapter", async () => {
+    const { adapter, send } = fixture();
+    send.mockRejectedValueOnce(
+      new ProviderError("Rate limited", "claude-agent-sdk", 429, {
+        retryAfterMs: 0,
       }),
-    ).rejects.toBe(error);
-    expect(f.query).toHaveBeenCalledTimes(1);
-    expect(primarySend).not.toHaveBeenCalled();
-    expect(f.fallback).not.toHaveBeenCalled();
-    expect(f.paidSend).not.toHaveBeenCalled();
-  });
-
-  test("an API-bound retry wrapper fails closed when the effective request selects SDK", async () => {
-    const primarySend = mock(async () => response);
-    const primary: Provider = { name: "anthropic", sendMessage: primarySend };
-    const f = fixture(new Error("SDK unavailable"));
-    const retry = new RetryProvider(primary, {
-      resolveFallbackRoute: f.fallback,
-    });
-    recordFallbackServed({ upstream: "anthropic" });
-    await expect(
-      retry.sendMessage(messages, {
-        config: { callSite: "conversationTitle" },
-      }),
-    ).rejects.toThrow("No API provider was used");
-    expect(primarySend).not.toHaveBeenCalled();
-    expect(f.fallback).not.toHaveBeenCalled();
-    expect(f.paidSend).not.toHaveBeenCalled();
-  });
-
-  test("an explicit API override retains ordinary API breaker and backup behavior", async () => {
-    const sdkSend = mock(async () => response);
-    const sdk: Provider = { name: "claude-agent-sdk", sendMessage: sdkSend };
-    const apiSend = mock(async () => response);
-    const api: Provider = { name: "openai", sendMessage: apiSend };
-    const paidSend = mock(async () => response);
-    const paid: Provider = { name: "anthropic", sendMessage: paidSend };
-    const fallback = mock(async (_options: SendMessageOptions | undefined) => ({
-      provider: paid,
-      overrideProfile: "paid-backup",
-      forwardUsageAttributionHeaders: false,
-    }));
-    const apiRetry = new RetryProvider(api, { resolveFallbackRoute: fallback });
-    const routing = new CallSiteRoutingProvider(
-      new RetryProvider(sdk),
-      async () => apiRetry,
     );
-    recordFallbackServed({ upstream: "openai" });
-    const result = await routing.sendMessage(messages, {
-      config: { callSite: "conversationTitle", overrideProfile: "api-primary" },
-    });
-    expect(result.actualProvider).toBe("anthropic");
-    expect(sdkSend).not.toHaveBeenCalled();
-    expect(apiSend).not.toHaveBeenCalled();
-    expect(fallback).toHaveBeenCalledTimes(1);
-    expect(paidSend).toHaveBeenCalledTimes(1);
+    expect(
+      await adapter.sendMessage(messages, {
+        config: { callSite: "conversationTitle" },
+      }),
+    ).toEqual(response);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0]?.[1]?.config?.model).toBe("haiku");
+    expect(send.mock.calls[1]?.[1]?.config?.model).toBe("haiku");
+  });
+
+  test("exhausts ordinary retries without consulting a managed backup breaker", async () => {
+    const { adapter, send } = fixture();
+    const error = new ProviderError(
+      "Service unavailable",
+      "claude-agent-sdk",
+      503,
+      {
+        retryAfterMs: 0,
+      },
+    );
+    send.mockRejectedValue(error);
+    recordFallbackServed({ upstream: "claude-agent-sdk" });
+    await expect(
+      adapter.sendMessage(messages, {
+        config: { callSite: "conversationTitle" },
+      }),
+    ).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(DEFAULT_MAX_RETRIES + 1);
+  });
+
+  test("surfaces subscription authentication failures without retrying", async () => {
+    const { adapter, send } = fixture();
+    const error = new ProviderError(
+      "Sign in to Claude Code",
+      "claude-agent-sdk",
+      401,
+    );
+    send.mockRejectedValue(error);
+    await expect(
+      adapter.sendMessage(messages, {
+        config: { callSite: "conversationTitle" },
+      }),
+    ).rejects.toBe(error);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,8 +47,11 @@ provider.
 - Missing Claude Code or a missing subscription sign-in produces an explicit
   setup error when a request is made. Install or sign in using Claude Code on
   the assistant's computer, then retry
-- Subscription limits and model availability apply. An unavailable subscription
-  does not silently switch to a paid API provider
+- Subscription limits and model availability apply. Requests use ordinary
+  retries. Subscription connections do not receive a managed automatic backup
+- Existing overrides and missing-connection fallback to the provider's default
+  transport still apply. Check your profile and fallback settings; separate
+  services and API overrides may incur charges
 - This provider is available to self-hosted assistants. A platform-hosted
   assistant cannot use a Claude Code installation on your computer
 - Other providers and saved API-key connections keep their existing behavior

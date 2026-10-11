@@ -490,7 +490,9 @@ async function runToolLeaf(
   };
 
   const result = await loop.run({
-    callSite: LEAF_CALL_SITE,
+    ...(provider.name === "claude-agent-sdk"
+      ? { callSite: LEAF_CALL_SITE }
+      : {}),
     messages,
     onEvent,
     requestId: ephemeralConversationId,

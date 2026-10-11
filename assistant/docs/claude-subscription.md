@@ -32,9 +32,10 @@ import, OAuth proxy, API-key conversion, or Vellum-hosted login flow.
   Vellum dispatch. These are explicit integration boundaries, not claims of
   interchangeable internal loop behavior.
 - `providers/claude-agent-sdk/client.ts` handles auxiliary inference through
-  bounded, tool-free SDK queries, including structured output. It does not use
-  an API model to title, classify, or select memory behind a subscription
-  profile. Deliberate call-site/profile overrides remain authoritative.
+  bounded, tool-free SDK queries, including structured output. Once selected,
+  the adapter uses the SDK for titles, classification and memory selection.
+  Provider resolution, explicit overrides and soft connection failures retain
+  the existing shared routing behavior.
 
 ## Authentication and billing
 
@@ -50,10 +51,19 @@ pass the minimum check; this does not mean every later release was tested, or
 that Anthropic universally requires this minimum for all SDK uses.
 
 Subscription limits and account-level extra-usage settings still apply. This is
-not a spending cap or a promise of zero incremental charges. A subscription
-failure does not authorize routing to a paid API. Existing explicit API profile
-and call-site overrides can still incur their normal charges. Saving a profile
-skips the model-generation validation probe.
+not a spending cap or a promise of zero incremental charges. Auxiliary requests
+use the shared retry wrapper, like ChatGPT subscription requests. Existing
+adapter construction supplies automatic backup-profile failover only to
+Vellum-managed connections, not subscription/no-auth connections. The SDK owns
+recovery within a root agent query; Vellum does not replay that query after a
+possibly completed tool effect.
+
+The separate, pre-existing connection-resolution behavior is unchanged: a soft
+failure to construct a requested provider adapter can use the default transport,
+which may be API-billed. Explicit profile and call-site overrides also retain
+their existing behavior and charges. This integration does not add a global
+no-fallback policy or subscription backup feature. Saving a profile skips the
+model-generation validation probe.
 
 The SDK does not provide embeddings. Memory embedding generation keeps its
 separately configured `memory.embeddings` backend, which may use local models

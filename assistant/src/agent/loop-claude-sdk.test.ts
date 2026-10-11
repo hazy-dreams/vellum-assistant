@@ -13,7 +13,9 @@ import {
   resetPluginRegistryForTests,
 } from "../plugins/registry.js";
 import * as providerSendMessage from "../providers/provider-send-message.js";
+import { RetryProvider } from "../providers/retry.js";
 import type { Message, ToolDefinition } from "../providers/types.js";
+import { UsageTrackingProvider } from "../providers/usage-tracking.js";
 import { ProviderError } from "../util/errors.js";
 import type {
   ClaudeSdkRunOptions,
@@ -283,13 +285,19 @@ describe("AgentLoop Claude SDK dispatch", () => {
 
   test("workflow tool leaves forward workflowLeaf so their subscription profile reaches the SDK", async () => {
     const sdk = mockRuntime();
-    const { provider, calls } = createMockProvider([
-      textResponse("Must not use API"),
-    ]);
+    const { provider, calls } = createMockProvider(
+      [textResponse("Must not use API")],
+      "claude-agent-sdk",
+    );
+    const wrapped = new providerSendMessage.CallSiteConfiguredProvider(
+      new UsageTrackingProvider(new RetryProvider(provider)),
+      "workflowLeaf",
+      "subscription-profile",
+    );
     const configured = spyOn(
       providerSendMessage,
       "getConfiguredProvider",
-    ).mockResolvedValue(provider);
+    ).mockResolvedValue(wrapped);
     restore.push(() => configured.mockRestore());
     const { runLeaf } = await import("../workflows/leaf-runner.js");
     const result = await runLeaf({
@@ -308,5 +316,41 @@ describe("AgentLoop Claude SDK dispatch", () => {
     );
     expect(calls).toHaveLength(0);
     expect(result.output).toBe("SDK result");
+  });
+  test("existing API workflow leaves keep their semantic call site unset", async () => {
+    const sdk = mockRuntime();
+    const { provider, calls } = createMockProvider(
+      [textResponse("Native leaf result")],
+      "anthropic",
+    );
+    const wrapped = new providerSendMessage.CallSiteConfiguredProvider(
+      new UsageTrackingProvider(new RetryProvider(provider)),
+      "workflowLeaf",
+      "native-profile",
+    );
+    const configured = spyOn(
+      providerSendMessage,
+      "getConfiguredProvider",
+    ).mockResolvedValue(wrapped);
+    const loopRun = spyOn(AgentLoop.prototype, "run");
+    restore.push(
+      () => configured.mockRestore(),
+      () => loopRun.mockRestore(),
+    );
+    const { runLeaf } = await import("../workflows/leaf-runner.js");
+    const result = await runLeaf({
+      prompt: "Complete the API leaf task",
+      tools: [],
+      profile: "native-profile",
+      trustContext: { sourceChannel: "vellum", trustClass: "unknown" },
+    });
+    expect(configured).toHaveBeenCalledWith("workflowLeaf", {
+      overrideProfile: "native-profile",
+    });
+    expect(loopRun).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(loopRun.mock.calls[0]![0], "callSite")).toBe(false);
+    expect(sdk).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(result.output).toBe("Native leaf result");
   });
 });

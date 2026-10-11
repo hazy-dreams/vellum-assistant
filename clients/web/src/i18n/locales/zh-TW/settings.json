@@ -2579,7 +2579,7 @@
   },
   "claudeAgentSdkSettings": {
     "description": "透過 Claude Agent SDK 使用現有的 Claude Code 登入。在執行此助理的同一台電腦上安裝 Claude Code，並使用 Claude 訂閱登入。Vellum 不會啟動登入流程或要求輸入權杖。",
-    "billing": "使用 Claude 訂閱的額度。如果訂閱無法使用，不會切換至付費 API 額度。預設供應商適用於沒有個別設定的請求。現有聊天設定檔和背景工作的個別設定仍會使用各自選定的供應商。 Claude Agent SDK 不提供嵌入向量。記憶嵌入仍使用單獨設定的後端，可能產生 API 或託管服務費用。",
+    "billing": "使用 Claude 訂閱的額度和一般重試機制。請檢查設定檔和備援設定；獨立服務及個別指定的 API 供應商可能產生費用。預設供應商適用於沒有個別設定的請求。現有聊天設定檔和背景工作的個別設定仍會使用各自選定的供應商。 Claude Agent SDK 不提供嵌入向量。記憶嵌入仍使用單獨設定的後端，可能產生 API 或託管服務費用。",
     "pathLabel": "Claude Code 執行檔路徑（選填）",
     "pathPlaceholder": "自動尋找",
     "pathHint": "留空以自動尋找 Claude Code，或輸入助理所在電腦上已安裝的 Claude Code 執行檔的絕對路徑。所有 Claude 訂閱設定檔共用此設定。",

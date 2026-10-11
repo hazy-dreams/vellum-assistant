@@ -2438,7 +2438,7 @@
   },
   "claudeAgentSdkSettings": {
     "description": "Usa Claude Agent SDK con tu sesión existente de Claude Code. Instala Claude Code e inicia sesión con tu suscripción de Claude en el mismo equipo que ejecuta este asistente. Vellum no inicia la sesión ni solicita un token.",
-    "billing": "Usa los límites de tu suscripción de Claude. No cambiará a créditos de API de pago si la suscripción no está disponible. El proveedor predeterminado se aplica a las solicitudes sin una configuración específica. Los perfiles de chat y las tareas en segundo plano con una configuración específica conservan sus proveedores. Claude Agent SDK no proporciona embeddings. Los embeddings de memoria mantienen su backend configurado por separado y pueden generar cargos de API o de servicios gestionados.",
+    "billing": "Usa los límites de tu suscripción de Claude y los reintentos habituales. Revisa tu perfil y los ajustes de respaldo; los servicios independientes y las configuraciones específicas de API pueden generar cargos. El proveedor predeterminado se aplica a las solicitudes sin una configuración específica. Los perfiles de chat y las tareas en segundo plano con una configuración específica conservan sus proveedores. Claude Agent SDK no proporciona embeddings. Los embeddings de memoria mantienen su backend configurado por separado y pueden generar cargos de API o de servicios gestionados.",
     "pathLabel": "Ruta del ejecutable de Claude Code (opcional)",
     "pathPlaceholder": "Detección automática",
     "pathHint": "Déjala en blanco para buscar Claude Code automáticamente. También puedes introducir la ruta absoluta del ejecutable instalado de Claude Code en el equipo del asistente. Todos los perfiles de la suscripción de Claude comparten este ajuste.",

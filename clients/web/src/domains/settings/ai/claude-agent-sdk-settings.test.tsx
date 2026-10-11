@@ -47,7 +47,9 @@ test("explains subscription setup without token, API key, or login controls", ()
   expect(
     screen.getByText(/same computer that runs this assistant/),
   ).toBeTruthy();
-  expect(screen.getByText(/will not switch to paid API credits/)).toBeTruthy();
+  expect(
+    screen.getByText(/Uses your Claude subscription limits and ordinary retries/),
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: /sign in|log in/i })).toBeNull();
   expect(screen.queryByLabelText(/API key|token/i)).toBeNull();
   fireEvent.change(
@@ -57,7 +59,7 @@ test("explains subscription setup without token, API key, or login controls", ()
   expect(value).toBe("/opt/claude");
 });
 
-test("discloses separate memory embedding charges while preserving override guidance", () => {
+test("discloses fallback and separate service charges while preserving override guidance", () => {
   render(
     <ClaudeAgentSdkSettings
       executablePath=""
@@ -66,6 +68,10 @@ test("discloses separate memory embedding charges while preserving override guid
     />,
   );
   const billing = screen.getByText(/Claude Agent SDK does not provide embeddings/);
+  expect(billing.textContent).toContain(
+    "Check your profile and fallback settings; separate services and API overrides may incur charges.",
+  );
+  expect(billing.textContent).not.toContain("will not switch to paid API credits");
   expect(billing.textContent).toContain(
     "Memory embeddings keep their separately configured backend and may incur API or managed-service charges.",
   );

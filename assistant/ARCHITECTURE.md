@@ -7,7 +7,7 @@ This document owns assistant-runtime architecture details. The repo-level archit
 The `claude-agent-sdk` provider selects an SDK-owned agent loop through the
 ordinary model/profile resolver. Vellum retains its canonical conversation,
 executor, permissions and client-event boundaries; tool-free auxiliary jobs use
-the same SDK provider without an API fallback. See
+the same SDK provider through existing routing and retry conventions. See
 [Claude subscription runtime](docs/claude-subscription.md) for authentication,
 resume, hook boundaries, testing and third-party licensing.
 

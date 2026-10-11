@@ -2579,7 +2579,7 @@
   },
   "claudeAgentSdkSettings": {
     "description": "通过 Claude Agent SDK 使用现有的 Claude Code 登录。在运行此助手的同一台电脑上安装 Claude Code，并使用 Claude 订阅登录。Vellum 不会启动登录流程或要求输入令牌。",
-    "billing": "使用 Claude 订阅的额度。如果订阅不可用，不会切换到付费 API 额度。默认提供商适用于没有单独设置的请求。现有聊天配置和后台任务的单独设置仍会使用各自选定的提供商。 Claude Agent SDK 不提供嵌入向量。记忆嵌入仍使用单独配置的后端，可能产生 API 或托管服务费用。",
+    "billing": "使用 Claude 订阅的额度和常规重试机制。请检查配置和备用设置；独立服务及单独指定的 API 提供商可能产生费用。默认提供商适用于没有单独设置的请求。现有聊天配置和后台任务的单独设置仍会使用各自选定的提供商。 Claude Agent SDK 不提供嵌入向量。记忆嵌入仍使用单独配置的后端，可能产生 API 或托管服务费用。",
     "pathLabel": "Claude Code 可执行文件路径（可选）",
     "pathPlaceholder": "自动查找",
     "pathHint": "留空以自动查找 Claude Code，或输入助手所在电脑上已安装的 Claude Code 可执行文件的绝对路径。所有 Claude 订阅配置共用此设置。",
