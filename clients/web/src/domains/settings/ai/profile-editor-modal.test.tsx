@@ -86,6 +86,30 @@ mock.module("@/domains/settings/ai/use-provider-credentials-list", () => ({
   }),
 }));
 
+mock.module(
+  "./use-claude-models",
+  (): Partial<typeof import("./use-claude-models")> => ({
+    useClaudeModels: (_assistantId, enabled) => ({
+      models: [
+        {
+          provider: "claude-agent-sdk",
+          id: "sonnet",
+          displayName: "Claude Sonnet (subscription)",
+          description: "",
+        },
+      ],
+      status: enabled ? "ready" : "disabled",
+      isRefreshing: false,
+      isStale: false,
+      fetchedAt: undefined,
+      error: null,
+      refresh: async () => {},
+    }),
+    claudeModelsQueryKey: (assistantId) =>
+      ["claude-agent-sdk-models", assistantId] as const,
+  }),
+);
+
 const { ProfileEditorModal } =
   await import("@/domains/settings/ai/profile-editor-modal");
 
@@ -601,7 +625,9 @@ describe("ProfileEditorModal create mode — provider-first", () => {
       optionRows()
         .filter(
           (row) =>
-            row.label !== "+ Create new provider" && row.label !== "Ollama" && row.label !== "Claude subscription",
+            row.label !== "+ Create new provider" &&
+            row.label !== "Ollama" &&
+            row.label !== "Claude subscription",
         )
         .every((row) => row.meta === ADD_KEY_META),
     ).toBe(true);
@@ -2475,7 +2501,6 @@ describe("entries wire shape", () => {
     }
   });
 });
-
 
 test("Claude subscription creates a distinct selector profile with its canonical provider", async () => {
   useAssistantLifecycleStore.setState({

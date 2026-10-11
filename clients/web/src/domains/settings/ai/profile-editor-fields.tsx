@@ -137,9 +137,7 @@ export function ProfileEditorFields({
           i18nKey="profileEditorFields.descriptionLabel"
           ns="settings"
           components={{
-            optional: (
-              <span className="text-[var(--content-disabled)]" />
-            ),
+            optional: <span className="text-[var(--content-disabled)]" />,
           }}
         />
       }
@@ -186,6 +184,7 @@ export function ProfileEditorFields({
       onMaxTokensChange={editor.setMaxTokens}
       contextWindowMaxInputTokens={editor.contextWindowMaxInputTokens}
       onContextWindowChange={editor.setContextWindowMaxInputTokens}
+      effortOptions={editor.effortOptions}
       effort={editor.effort}
       onEffortChange={editor.setEffort}
       speed={editor.speed}
@@ -387,6 +386,7 @@ export function ProfileEditorFields({
         />
       ) : (
         <ProfileEditorProviderSection
+          claudeModels={editor.claudeModels}
           provider={editor.provider}
           model={editor.model}
           providerConnection={editor.providerConnection}
@@ -469,6 +469,7 @@ export function ProfileEditorFields({
       {activeToggle}
 
       <ProfileEditorProviderSection
+        claudeModels={editor.claudeModels}
         provider={editor.provider}
         model={editor.model}
         providerConnection={editor.providerConnection}

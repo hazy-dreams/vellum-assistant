@@ -28,6 +28,7 @@ import {
 } from "@/assistant/llm-model-catalog";
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   OPENAI_COMPATIBLE_PROVIDER,
 } from "@/domains/settings/ai/constants";
 import {
@@ -40,6 +41,10 @@ import {
   unconnectedProviders,
 } from "@/domains/settings/ai/provider-availability";
 import { connectionAuthTypeForProvider } from "@/domains/settings/ai/provider-editor-constants";
+import {
+  claudeModelOptions,
+  type ClaudeModelOption,
+} from "@/domains/settings/ai/claude-model-options";
 import type {
   ConnectionProvider,
   ProviderConnection,
@@ -91,6 +96,8 @@ export interface ModelFirstOption {
 
 export interface ModelFirstInput {
   readonly connections: readonly ProviderConnection[];
+  readonly claudeModels?: readonly ClaudeModelOption[];
+  readonly selectedClaudeModel?: ClaudeModelOption;
   /** Whether Vellum-hosted GPU catalog entries are visible. */
   readonly hostedInference: boolean;
   readonly activeAssistantIsSelfHosted: boolean;
@@ -292,12 +299,16 @@ export function resolveModelFirstOptions(
       continue;
     }
 
-    const models = getTextGenerationModelsForProvider(
-      kind,
-      catalogEnabledFlags({
-        hostedInference: input.hostedInference,
-      }),
-    );
+    const models =
+      kind === CLAUDE_AGENT_SDK_PROVIDER
+        ? claudeModelOptions(
+            input.claudeModels ?? [],
+            input.selectedClaudeModel,
+          )
+        : getTextGenerationModelsForProvider(
+            kind,
+            catalogEnabledFlags({ hostedInference: input.hostedInference }),
+          );
     if (models.length === 0) {
       continue;
     }
@@ -479,7 +490,10 @@ export function customModelProviderCandidates(
   const { kinds, connected } = selectableKinds(input);
   const candidates: ProviderCandidate[] = [];
   for (const kind of kinds) {
-    if (kind === CHATGPT_CONNECTION_PROVIDER) {
+    if (
+      kind === CHATGPT_CONNECTION_PROVIDER ||
+      kind === CLAUDE_AGENT_SDK_PROVIDER
+    ) {
       continue;
     }
     if (connected.has(kind)) {

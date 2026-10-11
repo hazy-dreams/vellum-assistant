@@ -1,19 +1,22 @@
 /**
- * Route definitions for the inference model catalog.
+ * Offline inference catalog and explicit runtime model discovery.
  *
- * GET /v1/inference/models — list catalog models (optional ?provider= filter)
- *
- * The catalog (`PROVIDER_CATALOG`) is the code-owned source of truth for which
- * model ids each provider serves. Exposing it lets clients (and the assistant
- * itself) discover valid model ids instead of guessing — the same ids
- * `isModelInCatalog` validates against when a profile is created.
+ * GET lists code-owned catalog entries for existing clients. POST initializes
+ * Claude's SDK without a generation prompt to discover its model choices.
+ * SDK-owned IDs are not constrained by the offline catalog.
  */
 
 import { z } from "zod";
 
+import {
+  ClaudeSdkDiscoveredModelSchema,
+  discoverClaudeSdkModels,
+} from "../../agent/claude-sdk/models.js";
+import { getConfigReadOnly } from "../../config/loader.js";
 import { PROVIDER_CATALOG } from "../../providers/model-catalog.js";
+import { getSandboxWorkingDir } from "../../util/platform.js";
 import { ACTOR_PRINCIPALS } from "../auth/route-policy.js";
-import { BadRequestError } from "./errors.js";
+import { BadRequestError, FailedDependencyError } from "./errors.js";
 import type { RouteDefinition, RouteHandlerArgs } from "./types.js";
 
 const catalogModelSchema = z
@@ -75,7 +78,64 @@ function handleListModels({ queryParams = {} }: RouteHandlerArgs) {
   return { models };
 }
 
+const discoverModelsRequestSchema = z.object({
+  provider: z.literal("claude-agent-sdk"),
+  refresh: z.boolean().optional(),
+});
+
+async function handleDiscoverModels({ body }: RouteHandlerArgs) {
+  const request = discoverModelsRequestSchema.safeParse(body);
+  if (!request.success) {
+    throw new BadRequestError(
+      "Model discovery requires provider claude-agent-sdk and an optional boolean refresh.",
+    );
+  }
+  const executablePath =
+    getConfigReadOnly().llm.claudeAgentSdk?.executablePath ??
+    Bun.which("claude");
+  if (!executablePath) {
+    throw new FailedDependencyError(
+      "Install Claude Code and sign in on the computer running this assistant to discover Claude subscription models.",
+      { reason: "invalid_executable" },
+    );
+  }
+  const result = await discoverClaudeSdkModels({
+    executablePath,
+    cwd: getSandboxWorkingDir(),
+    refresh: request.data.refresh,
+  });
+  if (!result.ok) {
+    throw new FailedDependencyError(result.message, { reason: result.reason });
+  }
+  return { models: result.models, fetchedAt: result.fetchedAt };
+}
+
 export const ROUTES: RouteDefinition[] = [
+  {
+    operationId: "inference_models_discover",
+    endpoint: "inference/models/discover",
+    method: "POST",
+    policy: {
+      requiredScopes: ["settings.read"],
+      allowedPrincipalTypes: ACTOR_PRINCIPALS,
+    },
+    summary: "Discover Claude subscription models",
+    description:
+      "Initialize the installed Claude Agent SDK to read its supported model choices without sending a generation prompt. Refresh bypasses cached metadata; concurrent requests share initialization. Ordinary requests may reuse a short-lived result. Availability and quotas are checked by Claude when a model is used.",
+    tags: ["inference"],
+    requestBody: discoverModelsRequestSchema,
+    responseBody: z.object({
+      models: z.array(ClaudeSdkDiscoveredModelSchema),
+      fetchedAt: z.string(),
+    }),
+    additionalResponses: {
+      "400": { description: "Invalid discovery request" },
+      "424": {
+        description: "Claude setup, authentication, or model discovery failed",
+      },
+    },
+    handler: handleDiscoverModels,
+  },
   {
     operationId: "inference_models_list",
     endpoint: "inference/models",

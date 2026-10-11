@@ -37,6 +37,10 @@ import {
   PickerMeta,
   useProviderPickerAvailability,
 } from "@/domains/settings/ai/provider-picker-availability";
+import { claudeModelOptions } from "./claude-model-options";
+import { ClaudeModelDiscoveryStatus } from "./claude-model-discovery-status";
+import type { ClaudeModelDiscovery } from "./use-claude-models";
+
 import type {
   ConnectionModel,
   ConnectionProvider,
@@ -64,6 +68,7 @@ const CUSTOM_MODEL_OPTION_VALUE = "__custom-model-id__";
 
 interface ProfileEditorProviderSectionProps {
   provider: ConnectionProvider | "";
+  claudeModels?: ClaudeModelDiscovery;
   model: string;
   providerConnection: string;
   onProviderChange: (newProvider: ConnectionProvider) => void;
@@ -104,6 +109,7 @@ interface ProfileEditorProviderSectionProps {
  */
 export function ProfileEditorProviderSection({
   provider,
+  claudeModels,
   model,
   providerConnection,
   onProviderChange,
@@ -183,9 +189,7 @@ export function ProfileEditorProviderSection({
   // `connections === []` is distinct: zero connections confirmed, so the
   // filter runs and yields empty — the empty-state hint fires.
   const providerOptionsSource =
-    connections === undefined
-      ? CATALOG_PROVIDERS
-      : visibleProviders;
+    connections === undefined ? CATALOG_PROVIDERS : visibleProviders;
 
   // A confirmed-empty connection list. Read-only profiles cannot act on it,
   // so they are not told to.
@@ -217,10 +221,10 @@ export function ProfileEditorProviderSection({
       if (!provider) {
         return [];
       }
-      const catalogModels = getVisibleModelsForProvider(
-        provider,
-        catalogFlags,
-      );
+      if (provider === CLAUDE_AGENT_SDK_PROVIDER) {
+        return claudeModels?.models ?? [];
+      }
+      const catalogModels = getVisibleModelsForProvider(provider, catalogFlags);
       if (catalogModels.length > 0) {
         if (
           restrictsToSubscriptionModels(
@@ -258,6 +262,7 @@ export function ProfileEditorProviderSection({
       providerConnection,
       availableConnectionsForProvider,
       catalogFlags,
+      claudeModels?.models,
     ]);
 
   // The Model dropdown always offers the profile's currently-bound model, even
@@ -269,6 +274,12 @@ export function ProfileEditorProviderSection({
     useMemo(() => {
       if (!model || availableModels.some((m) => m.id === model)) {
         return availableModels;
+      }
+      if (provider === CLAUDE_AGENT_SDK_PROVIDER) {
+        return claudeModelOptions(availableModels, {
+          id: model,
+          displayName: model,
+        });
       }
       const fromCatalog = getModelsForProvider(provider).find(
         (m) => m.id === model,
@@ -286,11 +297,13 @@ export function ProfileEditorProviderSection({
   // drift apart.
   const modelEmptyState = !provider
     ? "no-provider"
-    : availableModels.length === 0
-      ? provider === OPENAI_COMPATIBLE_PROVIDER
-        ? "configure-connection"
-        : "unknown-to-catalog"
-      : null;
+    : provider === CLAUDE_AGENT_SDK_PROVIDER
+      ? null
+      : availableModels.length === 0
+        ? provider === OPENAI_COMPATIBLE_PROVIDER
+          ? "configure-connection"
+          : "unknown-to-catalog"
+        : null;
   const modelEmptyStateCopy = useMemo(() => {
     switch (modelEmptyState) {
       case "no-provider":
@@ -329,7 +342,7 @@ export function ProfileEditorProviderSection({
   // resets the model on provider switch, so this never strands a
   // cross-provider binding.
   useEffect(() => {
-    if (!provider) {
+    if (!provider || provider === CLAUDE_AGENT_SDK_PROVIDER) {
       return;
     }
     // While the user is typing a custom id it won't match the catalog or
@@ -586,6 +599,12 @@ export function ProfileEditorProviderSection({
             ]}
           />
         )}
+        {provider === CLAUDE_AGENT_SDK_PROVIDER && claudeModels ? (
+          <ClaudeModelDiscoveryStatus
+            discovery={claudeModels}
+            selectedModel={model}
+          />
+        ) : null}
         {isEnteringCustomModel ? (
           <Typography
             variant="body-small-default"
@@ -594,7 +613,9 @@ export function ProfileEditorProviderSection({
           >
             {t("profileEditorProviderSection.enterCustomModelIdHint")}
           </Typography>
-        ) : providerWithoutModel && !isReadOnly ? (
+        ) : providerWithoutModel &&
+          !isReadOnly &&
+          provider !== CLAUDE_AGENT_SDK_PROVIDER ? (
           <Typography
             variant="body-small-default"
             as="p"

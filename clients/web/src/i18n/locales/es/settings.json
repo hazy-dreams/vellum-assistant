@@ -2450,5 +2450,18 @@
     "saveFailed": "No se pudo guardar la ruta de Claude Code. El proveedor no se ha guardado. Inténtalo de nuevo.",
     "rowMeta": "Suscripción de Claude · Sesión local de Claude Code",
     "retry": "Intentar de nuevo"
+  },
+  "claudeModelDiscovery": {
+    "loading": "Cargando modelos de Claude Code local…",
+    "ready": "Modelos encontrados en Claude Code local.",
+    "empty": "Claude Code no devolvió modelos disponibles. Comprueba la sesión local y actualiza.",
+    "stale": "Se muestran modelos encontrados anteriormente. Actualiza para comprobar su disponibilidad.",
+    "loadFailed": "No se pudieron encontrar modelos de Claude. Comprueba que Claude Code esté instalado y tenga una sesión iniciada en el equipo del asistente y vuelve a intentarlo.",
+    "supportFailed": "No se pudo comprobar si el asistente admite la búsqueda de modelos de Claude. Vuelve a intentarlo.",
+    "updateRequired": "Actualiza este asistente para encontrar modelos de la suscripción a Claude.",
+    "updatedAt": "Última búsqueda: {time}",
+    "selectionUnavailable": "El modelo guardado {model} no aparece en la lista encontrada. Se conserva tu selección.",
+    "refresh": "Actualizar modelos de Claude",
+    "retry": "Reintentar búsqueda de Claude"
   }
 }

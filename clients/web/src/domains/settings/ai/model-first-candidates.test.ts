@@ -333,16 +333,16 @@ describe("customModelProviderCandidates", () => {
   });
 });
 
-
-test("Claude subscription aliases are separate from API-credit models", () => {
-  const options = resolveModelFirstOptions(input([]));
+test("Claude discovery adds a new model without a catalog release", () => {
+  const claudeModels = [{ id: "claude-future", displayName: "Future Claude" }];
+  const options = resolveModelFirstOptions(input([], { claudeModels }));
   const subscription = options.find(
-    (option) => option.displayName === "Claude Sonnet (subscription)",
+    (option) => option.displayName === "Future Claude",
   );
   expect(subscription?.candidates).toHaveLength(1);
   expect(subscription?.candidates[0]).toMatchObject({
     provider: "claude-agent-sdk",
-    modelId: "sonnet",
+    modelId: "claude-future",
     setup: "set-up",
     connected: false,
   });
@@ -351,7 +351,42 @@ test("Claude subscription aliases are separate from API-credit models", () => {
   ).toBe(true);
   expect(
     resolveModelFirstOptions(
-      input([], { activeAssistantIsSelfHosted: false }),
-    ).some((option) => option.displayName === "Claude Sonnet (subscription)"),
+      input([], { activeAssistantIsSelfHosted: false, claudeModels }),
+    ).some((option) => option.displayName === "Future Claude"),
   ).toBe(false);
+});
+
+test("Claude subscription never invents choices when discovery is unavailable", () => {
+  expect(
+    resolveModelFirstOptions(input([])).some((option) =>
+      option.candidates.some(
+        (candidate) => candidate.provider === "claude-agent-sdk",
+      ),
+    ),
+  ).toBe(false);
+  expect(
+    customModelProviderCandidates(input([]), "custom").some(
+      (candidate) => candidate.provider === "claude-agent-sdk",
+    ),
+  ).toBe(false);
+});
+
+test("model-first keeps the selected Claude model after discovery removes it", () => {
+  const options = resolveModelFirstOptions(
+    input(
+      [connection("claude", "claude-agent-sdk", { auth: { type: "none" } })],
+      {
+        claudeModels: [],
+        selectedClaudeModel: { id: "saved-model", displayName: "Saved Claude" },
+      },
+    ),
+  );
+  expect(
+    options.find((option) => option.displayName === "Saved Claude")
+      ?.candidates[0],
+  ).toMatchObject({
+    provider: "claude-agent-sdk",
+    modelId: "saved-model",
+    connected: true,
+  });
 });

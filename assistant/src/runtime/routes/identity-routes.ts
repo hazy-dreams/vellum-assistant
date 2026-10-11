@@ -162,6 +162,7 @@ async function getDetailedHealth() {
       chatsSettings: true,
       composerSettings: true,
       claudeAgentSdk: true,
+      claudeAgentSdkModelDiscovery: true,
     },
     ...(profiler ? { profiler } : {}),
     ...migrationHealthFields,
@@ -284,6 +285,7 @@ const healthCapabilitiesSchema = z.object({
   chatsSettings: z.boolean().optional(),
   composerSettings: z.boolean().optional(),
   claudeAgentSdk: z.boolean().optional(),
+  claudeAgentSdkModelDiscovery: z.boolean().optional(),
 });
 
 const healthDiskSchema = z.object({

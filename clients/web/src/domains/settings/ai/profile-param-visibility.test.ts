@@ -265,9 +265,11 @@ describe("geminiThinkingLevels", () => {
       "medium",
       "high",
     ]);
-    expect(
-      geminiThinkingLevels("gemini-3.1-pro-preview-customtools"),
-    ).toEqual(["low", "medium", "high"]);
+    expect(geminiThinkingLevels("gemini-3.1-pro-preview-customtools")).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
   });
 
   test("gemini-3.8-flash excludes 'minimal'", () => {
@@ -294,15 +296,37 @@ describe("geminiThinkingLevels", () => {
   });
 });
 
-
-test("Claude SDK exposes effort without API sampling or invented token ceilings", () => {
-  for (const model of ["opus", "sonnet"]) {
-    expect(resolveProfileParamVisibility("claude-agent-sdk", model)).toEqual({
-      ...VISIBILITY_NONE,
-      effort: true,
-    });
+test("Claude SDK effort comes only from discovered capabilities", () => {
+  for (const model of ["opus", "sonnet", "haiku", "claude-future"]) {
+    expect(resolveProfileParamVisibility("claude-agent-sdk", model)).toEqual(
+      VISIBILITY_NONE,
+    );
   }
-  expect(resolveProfileParamVisibility("claude-agent-sdk", "haiku")).toEqual(
-    VISIBILITY_NONE,
-  );
+  const model = {
+    provider: "claude-agent-sdk" as const,
+    id: "claude-future",
+    displayName: "Future Claude",
+    description: "",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "high"] as const,
+  };
+  expect(
+    resolveProfileParamVisibility("claude-agent-sdk", model.id, {
+      ...model,
+      supportedEffortLevels: [...model.supportedEffortLevels],
+    }),
+  ).toEqual({ ...VISIBILITY_NONE, effort: true });
+  expect(
+    resolveProfileParamVisibility("claude-agent-sdk", model.id, {
+      ...model,
+      supportsEffort: false,
+      supportedEffortLevels: ["low"],
+    }),
+  ).toEqual(VISIBILITY_NONE);
+  expect(
+    resolveProfileParamVisibility("claude-agent-sdk", model.id, {
+      ...model,
+      supportedEffortLevels: undefined,
+    }),
+  ).toEqual(VISIBILITY_NONE);
 });

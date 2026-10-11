@@ -235,3 +235,19 @@ test("switching to an API provider neither saves nor validates the subscription 
   await result.current.savePath();
   expect(writes).toEqual([]);
 });
+
+test("saving a different executable clears discovered models from the old path", async () => {
+  const key = ["claude-agent-sdk-models", "assistant-1"];
+  queryClient.setQueryData(key, {
+    models: [{ id: "old-model" }],
+    fetchedAt: "2026-01-01T00:00:00Z",
+  });
+  const { result } = renderHook(
+    () => useClaudeAgentSdkSettings("assistant-1", true),
+    { wrapper: Wrapper },
+  );
+  await waitFor(() => expect(result.current.canSave).toBe(true));
+  act(() => result.current.onExecutablePathChange("/usr/local/bin/claude"));
+  await result.current.savePath();
+  expect(queryClient.getQueryData(key)).toBeUndefined();
+});

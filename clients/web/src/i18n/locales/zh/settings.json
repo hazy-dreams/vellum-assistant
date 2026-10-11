@@ -2591,5 +2591,18 @@
     "saveFailed": "无法保存 Claude Code 路径。提供商尚未保存，请重试。",
     "rowMeta": "Claude 订阅 · 本地 Claude Code 登录",
     "retry": "重试"
+  },
+  "claudeModelDiscovery": {
+    "loading": "正在从本地 Claude Code 加载模型…",
+    "ready": "已从本地 Claude Code 获取模型。",
+    "empty": "Claude Code 未返回可用模型。请检查本地登录状态并刷新。",
+    "stale": "正在显示之前获取的模型。请刷新以检查可用性。",
+    "loadFailed": "无法获取 Claude 模型。请确认运行助手的电脑已安装 Claude Code 并已登录，然后重试。",
+    "supportFailed": "无法检查助手是否支持获取 Claude 模型。请重试。",
+    "updateRequired": "请更新此助手，以获取 Claude 订阅模型。",
+    "updatedAt": "上次获取时间：{time}",
+    "selectionUnavailable": "已保存的模型 {model} 不在获取的列表中。已保留你的选择。",
+    "refresh": "刷新 Claude 模型",
+    "retry": "重新获取 Claude 模型"
   }
 }

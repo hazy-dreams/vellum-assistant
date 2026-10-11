@@ -58,10 +58,26 @@ import type {
   ProfileStatus,
   ProviderConnection,
 } from "@/generated/daemon/types.gen";
+import { useActiveAssistantIsSelfHosted } from "@/hooks/use-platform-gate";
 import { assistantSupportsEntryProviderBinding } from "@/lib/backwards-compat/entry-provider-binding";
 import { resolveSupportsProfileInputModalities } from "@/lib/backwards-compat/profile-input-modalities";
 import { assistantSupportsVellumProviderProfiles } from "@/lib/backwards-compat/vellum-profile-provider";
 import { badRequestMessage } from "@/utils/api-errors";
+
+import {
+  claudeModelEffortLevels,
+  findClaudeModel,
+} from "./claude-model-options";
+import {
+  useClaudeModels,
+  type ClaudeModelDiscovery,
+} from "./use-claude-models";
+import { useModelFirstProfileCreate } from "./use-model-first-profile-create-flag";
+
+type SelectedProfileModel = Pick<
+  LlmCatalogModel,
+  "id" | "displayName" | "maxOutputTokens" | "contextWindowTokens"
+>;
 
 /**
  * The settings surface persists through the generic config PATCH, which is
@@ -71,7 +87,7 @@ import { badRequestMessage } from "@/utils/api-errors";
  * assistant-api) so the two paths cannot drift; only the copy is local.
  */
 function maxTokensBudgetError(
-  catalogModel: LlmCatalogModel,
+  catalogModel: SelectedProfileModel,
   maxTokens: number,
 ): string | null {
   const issue = validateInferenceProfileConfig({
@@ -153,7 +169,9 @@ export interface ProfileEditor {
   thinkingLevel: GeminiThinkingLevel | typeof THINKING_LEVEL_INHERIT;
 
   visibility: ProfileParamVisibility;
-  selectedModel: LlmCatalogModel | null;
+  selectedModel: SelectedProfileModel | null;
+  claudeModels: ClaudeModelDiscovery;
+  effortOptions: readonly EffortSelection[] | undefined;
   defaultMaxOutputTokens: number | undefined;
   defaultContextWindowMaxInputTokens: number | undefined;
   effectiveConnections: ProviderConnection[];
@@ -346,13 +364,46 @@ export function useProfileEditor({
   );
   const nativeModel = routedModel?.model ?? model;
 
-  const selectedModel = useMemo(
+  // Host-supplied connections unioned with any created inline this session
+  // (deduped by name, prop wins).
+  const effectiveConnections = useMemo(() => {
+    const base = connections ?? [];
+    if (locallyCreatedConnections.length === 0) {
+      return base;
+    }
+    const known = new Set(base.map((c) => c.name));
+    return [
+      ...base,
+      ...locallyCreatedConnections.filter((c) => !known.has(c.name)),
+    ];
+  }, [connections, locallyCreatedConnections]);
+
+  const activeAssistantIsSelfHosted = useActiveAssistantIsSelfHosted();
+  const modelFirstCreate = useModelFirstProfileCreate();
+  const claudeModels = useClaudeModels(
+    assistantId,
+    provider === CLAUDE_AGENT_SDK_PROVIDER ||
+      (effectiveMode === "create" &&
+        modelFirstCreate &&
+        activeAssistantIsSelfHosted &&
+        effectiveConnections.some(
+          (connection) => connection.provider === CLAUDE_AGENT_SDK_PROVIDER,
+        )),
+  );
+  const selectedClaudeModel = findClaudeModel(claudeModels.models, nativeModel);
+  const effortOptions: readonly EffortSelection[] | undefined =
+    provider === CLAUDE_AGENT_SDK_PROVIDER
+      ? ["inherit", ...claudeModelEffortLevels(selectedClaudeModel)]
+      : undefined;
+  const selectedModel = useMemo<SelectedProfileModel | null>(
     () =>
-      provider
-        ? (getModelsForProvider(provider).find((m) => m.id === nativeModel) ??
-          null)
-        : null,
-    [provider, nativeModel],
+      provider === CLAUDE_AGENT_SDK_PROVIDER
+        ? (selectedClaudeModel ?? null)
+        : provider
+          ? (getModelsForProvider(provider).find((m) => m.id === nativeModel) ??
+            null)
+          : null,
+    [provider, nativeModel, selectedClaudeModel],
   );
 
   // The advanced-param defaults a profile inherits when it omits an override
@@ -376,23 +427,17 @@ export function useProfileEditor({
               "")
           : provider,
         nativeModel,
+        selectedClaudeModel,
       ),
-    [provider, model, nativeModel, routedModel, initialValues?.provider],
+    [
+      provider,
+      model,
+      nativeModel,
+      routedModel,
+      initialValues?.provider,
+      selectedClaudeModel,
+    ],
   );
-
-  // Host-supplied connections unioned with any created inline this session
-  // (deduped by name, prop wins).
-  const effectiveConnections = useMemo(() => {
-    const base = connections ?? [];
-    if (locallyCreatedConnections.length === 0) {
-      return base;
-    }
-    const known = new Set(base.map((c) => c.name));
-    return [
-      ...base,
-      ...locallyCreatedConnections.filter((c) => !known.has(c.name)),
-    ];
-  }, [connections, locallyCreatedConnections]);
 
   const availableConnectionsForProvider = useMemo(
     () =>
@@ -548,7 +593,12 @@ export function useProfileEditor({
     setProviderConnection(newConnection);
     // For providers with per-connection models (openai-compatible), clear the
     // selected model when switching connections if it's not in the new list.
-    if (provider && getModelsForProvider(provider).length === 0 && model) {
+    if (
+      provider &&
+      provider !== CLAUDE_AGENT_SDK_PROVIDER &&
+      getModelsForProvider(provider).length === 0 &&
+      model
+    ) {
       if (newConnection === "") {
         // "Any connection" - merge models from all connections and keep the
         // model if it exists in the merged set.
@@ -578,6 +628,9 @@ export function useProfileEditor({
     }
     setModel(newModel);
     setInputModalities({});
+    if (provider === CLAUDE_AGENT_SDK_PROVIDER) {
+      setEffort("inherit");
+    }
     // Reset token sliders when model changes
     setMaxTokens(null);
     setContextWindowMaxInputTokens(null);
@@ -588,11 +641,14 @@ export function useProfileEditor({
       label.trim() === "" || label === autoFilledLabelRef.current;
     if (effectiveMode === "create" && newModel && labelIsOurs) {
       const { name, key: derivedKey } = deriveProfileDefaults(
-        resolveModelDisplayName(
-          provider || undefined,
-          newModel,
-          availableConnectionsForProvider,
-        ),
+        (provider === CLAUDE_AGENT_SDK_PROVIDER
+          ? findClaudeModel(claudeModels.models, newModel)?.displayName
+          : undefined) ??
+          resolveModelDisplayName(
+            provider || undefined,
+            newModel,
+            availableConnectionsForProvider,
+          ),
         existingNames,
       );
       autoFilledLabelRef.current = name;
@@ -847,8 +903,19 @@ export function useProfileEditor({
       if (visibility.contextWindow && contextWindowMaxInputTokens !== null) {
         entry.contextWindow = { maxInputTokens: contextWindowMaxInputTokens };
       }
-      if (visibility.effort && effort !== "inherit") {
+      if (
+        visibility.effort &&
+        effort !== "inherit" &&
+        (effortOptions === undefined || effortOptions.includes(effort))
+      ) {
         entry.effort = effort;
+      } else if (
+        provider === CLAUDE_AGENT_SDK_PROVIDER &&
+        initialValues?.model === model &&
+        initialValues.effort === effort
+      ) {
+        // Discovery cannot silently erase an untouched saved setting.
+        entry.effort = initialValues.effort;
       }
       if (visibility.speed && speed !== "standard") {
         entry.speed = speed;
@@ -968,6 +1035,8 @@ export function useProfileEditor({
     thinkingLevel,
     visibility,
     selectedModel,
+    claudeModels,
+    effortOptions,
     defaultMaxOutputTokens,
     defaultContextWindowMaxInputTokens,
     effectiveConnections,

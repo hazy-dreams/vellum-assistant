@@ -12,6 +12,8 @@ import { useIsOrgReady } from "@/hooks/use-is-org-ready";
 import { useTranslation } from "@/i18n";
 import { badRequestMessage } from "@/utils/api-errors";
 
+import { claudeModelsQueryKey } from "./use-claude-models";
+
 export function useClaudeAgentSdkSettings(
   assistantId: string,
   enabled: boolean,
@@ -73,6 +75,14 @@ export function useClaudeAgentSdkSettings(
             claudeAgentSdk: { executablePath: executablePath.trim() || null },
           },
         },
+      });
+      await queryClient.cancelQueries({
+        queryKey: claudeModelsQueryKey(assistantId),
+        exact: true,
+      });
+      void queryClient.resetQueries({
+        queryKey: claudeModelsQueryKey(assistantId),
+        exact: true,
       });
       void queryClient.invalidateQueries({
         queryKey: configLlmDefaultproviderGetQueryKey({

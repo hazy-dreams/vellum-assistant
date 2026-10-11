@@ -2591,5 +2591,18 @@
     "saveFailed": "Could not save the Claude Code path. Your provider has not been saved. Try again.",
     "rowMeta": "Claude subscription · Local Claude Code sign-in",
     "retry": "Try again"
+  },
+  "claudeModelDiscovery": {
+    "loading": "Loading models from local Claude Code…",
+    "ready": "Models discovered from local Claude Code.",
+    "empty": "Claude Code returned no available models. Check your local sign-in and refresh.",
+    "stale": "Showing previously discovered models. Refresh to check availability.",
+    "loadFailed": "Could not discover Claude models. Check that Claude Code is installed and signed in on the assistant’s computer, then try again.",
+    "supportFailed": "Could not check assistant support for Claude model discovery. Try again.",
+    "updateRequired": "Update this assistant to discover Claude subscription models.",
+    "updatedAt": "Last discovered: {time}",
+    "selectionUnavailable": "Saved model {model} is not in the discovered list. Your selection is preserved.",
+    "refresh": "Refresh Claude models",
+    "retry": "Retry Claude discovery"
   }
 }

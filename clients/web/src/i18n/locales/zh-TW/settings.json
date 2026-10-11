@@ -2591,5 +2591,18 @@
     "saveFailed": "無法儲存 Claude Code 路徑。供應商尚未儲存，請重試。",
     "rowMeta": "Claude 訂閱 · 本機 Claude Code 登入",
     "retry": "重試"
+  },
+  "claudeModelDiscovery": {
+    "loading": "正在從本機 Claude Code 載入模型…",
+    "ready": "已從本機 Claude Code 取得模型。",
+    "empty": "Claude Code 未傳回可用模型。請檢查本機登入狀態並重新整理。",
+    "stale": "正在顯示先前取得的模型。請重新整理以檢查可用性。",
+    "loadFailed": "無法取得 Claude 模型。請確認執行助理的電腦已安裝 Claude Code 並已登入，然後重試。",
+    "supportFailed": "無法檢查助理是否支援取得 Claude 模型。請重試。",
+    "updateRequired": "請更新此助理，以取得 Claude 訂閱模型。",
+    "updatedAt": "上次取得時間：{time}",
+    "selectionUnavailable": "已儲存的模型 {model} 不在取得的清單中。已保留你的選擇。",
+    "refresh": "重新整理 Claude 模型",
+    "retry": "重新取得 Claude 模型"
   }
 }

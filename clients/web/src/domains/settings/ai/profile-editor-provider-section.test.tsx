@@ -112,7 +112,10 @@ describe("ProfileEditorProviderSection with an openai-compatible connection", ()
   const connection = {
     name: "lm-studio",
     provider: "openai-compatible",
-    auth: { type: "api_key", credential: "credential/openai-compatible/api_key" },
+    auth: {
+      type: "api_key",
+      credential: "credential/openai-compatible/api_key",
+    },
     models: [{ id: "llama-3.1", displayName: "Llama 3.1" }],
   };
 
@@ -145,22 +148,55 @@ describe("ProfileEditorProviderSection with an openai-compatible connection", ()
   });
 });
 
-
-test("Claude subscription offers exactly its three aliases with no custom API model escape", () => {
-  const connection = {
-    name: "claude-agent-sdk-personal",
-    provider: "claude-agent-sdk",
-    auth: { type: "none" },
-  };
+test("Claude subscription offers discovered models with no API model escape", () => {
   renderSection({
     provider: "claude-agent-sdk",
-    connections: [connection],
-    availableConnectionsForProvider: [connection],
+    claudeModels: {
+      models: [
+        {
+          provider: "claude-agent-sdk",
+          id: "claude-future",
+          displayName: "Future Claude",
+          description: "",
+        },
+      ],
+      status: "ready",
+      isRefreshing: false,
+      isStale: false,
+      fetchedAt: "2026-01-01T00:00:00Z",
+      error: null,
+      refresh: async () => {},
+    },
   });
   openModelList();
-  expect(optionLabels()).toEqual([
-    "Claude Opus (subscription)",
-    "Claude Sonnet (subscription)",
-    "Claude Haiku (subscription)",
-  ]);
+  expect(optionLabels()).toEqual(["Future Claude"]);
+});
+
+test("Claude subscription preserves a removed saved model and displays discovery failure", () => {
+  const onModelChange = mock(() => {});
+  const refresh = mock(async () => {});
+  renderSection({
+    provider: "claude-agent-sdk",
+    model: "retired-claude",
+    onModelChange,
+    claudeModels: {
+      models: [],
+      status: "error",
+      isRefreshing: false,
+      isStale: true,
+      fetchedAt: "2026-01-01T00:00:00Z",
+      error: "Sign in to local Claude Code.",
+      refresh,
+    },
+  });
+  expect(modelField().value).toBe("retired-claude");
+  expect(onModelChange).not.toHaveBeenCalled();
+  expect(screen.getByText("Sign in to local Claude Code.")).toBeTruthy();
+  expect(screen.getByText(/Your selection is preserved/)).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Retry Claude discovery" }),
+  );
+  expect(refresh).toHaveBeenCalledTimes(1);
+  openModelList();
+  expect(optionLabels()).toEqual(["retired-claude"]);
 });

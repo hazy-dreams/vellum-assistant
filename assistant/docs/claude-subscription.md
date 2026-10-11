@@ -115,3 +115,29 @@ Official references: [SDK TypeScript reference](https://code.claude.com/docs/en/
 [custom tools](https://code.claude.com/docs/en/agent-sdk/custom-tools),
 [sessions](https://code.claude.com/docs/en/agent-sdk/sessions), and
 [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md).
+
+## Model discovery
+
+The Claude subscription profile picker asks the installed SDK for its supported
+models. This reuses the delegated-agent convention: runtime-provided IDs and
+labels are authoritative, and a saved model ID remains visible even when it is
+absent from the latest list. Aliases and versioned IDs pass through unchanged.
+The default profile intents still use `sonnet`, `opus`, and `haiku` aliases.
+
+`POST /v1/inference/models/discover` initializes a no-prompt SDK session and reads
+`supportedModels()`. It does not submit a generation request. Initialization can
+still perform Claude Code startup, authentication, and network activity. Results
+are briefly cached; Refresh bypasses cached metadata, while concurrent requests
+share initialization. A failed refresh is
+shown explicitly and does not silently substitute the static catalog. The
+ordinary `GET /v1/inference/models` endpoint remains the offline catalog for
+existing clients and providers.
+
+Effort choices come from the SDK metadata. Its current model interface does not
+report context-window, output-token, vision, or tool-use limits; discovery does
+not invent those values. A discovered choice is not a promise of current quota
+or successful access: Claude remains responsible for validating a model when it
+is used. Saved SDK model IDs are not rejected against Vellum's static catalog,
+including after restarting the assistant. New choices can appear on refresh
+without a Vellum catalog release, subject to what the installed Claude Code and
+SDK version report.

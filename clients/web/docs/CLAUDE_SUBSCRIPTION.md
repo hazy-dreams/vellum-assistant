@@ -17,10 +17,12 @@ on the computer running your assistant.
 4. Leave the executable path blank for automatic discovery. If Claude Code is
    installed outside the normal locations, enter its absolute executable path.
    This path applies to every Claude subscription profile for the assistant.
-5. Add a profile using **Claude subscription** and select **Claude Opus
-   (subscription)**, **Claude Sonnet (subscription)**, or **Claude Haiku
-   (subscription)**. The aliases follow the models available through Claude Code
-   and your account.
+5. Add a profile using **Claude subscription** and choose a model discovered
+   from your local Claude Code installation. Both profile creation flows use
+   the same discovery result. Models reported by the installed SDK appear without
+   a Vellum catalog update; SDK or Claude Code updates may still be needed.
+   The model-first flow discovers Claude choices when a Claude subscription
+   provider is configured; add that provider in Settings first.
 6. Pick that profile in the chat's model selector. The subscription wording stays
    visible even when you give the profile a custom name. Use **Set as default**
    on the provider to route requests without a profile override through the
@@ -29,9 +31,17 @@ on the computer running your assistant.
    review them under the Language Model settings' Overrides section if you
    want those requests to use the subscription too.
 
-Saving settings does not generate a test response. Opus and Sonnet profiles
-expose effort settings; API sampling controls and fixed token ceilings are not
-shown for these subscription aliases.
+Saving settings and discovering models do not generate a test response. Effort
+controls appear only when the SDK advertises effort support and supported
+levels for the selected model. API sampling controls and fixed token ceilings
+are not inferred from model names.
+
+The model list shows when it was discovered. **Refresh Claude models** requests
+a fresh list; failures retain the previous list with a stale warning and a retry
+action. Saved model IDs and aliases remain selected even if they are missing
+from a later discovery result. Discovery reports SDK metadata, not a guarantee
+of account entitlement or remaining quota. Changing the shared executable path
+clears the discovery cache.
 
 Claude Agent SDK does not provide embeddings. Memory embeddings keep their
 separately configured backend (`memory.embeddings`) and may incur API or
@@ -45,8 +55,9 @@ provider.
 - A relative executable path is rejected. Clearing the field restores automatic
   discovery
 - Missing Claude Code or a missing subscription sign-in produces an explicit
-  setup error when a request is made. Install or sign in using Claude Code on
-  the assistant's computer, then retry
+  discovery/setup error. Install or sign in using Claude Code on the assistant's
+  computer, then use **Retry Claude discovery**. Older assistants without model
+  discovery show an update message and keep existing selections
 - Subscription limits and model availability apply. Requests use ordinary
   retries. Subscription connections do not receive a managed automatic backup
 - Existing overrides and missing-connection fallback to the provider's default
