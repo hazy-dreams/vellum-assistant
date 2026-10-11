@@ -144,3 +144,23 @@ describe("ProfileEditorProviderSection with an openai-compatible connection", ()
     expect(optionLabels()).toContain("gateway-alias");
   });
 });
+
+
+test("Claude subscription offers exactly its three aliases with no custom API model escape", () => {
+  const connection = {
+    name: "claude-agent-sdk-personal",
+    provider: "claude-agent-sdk",
+    auth: { type: "none" },
+  };
+  renderSection({
+    provider: "claude-agent-sdk",
+    connections: [connection],
+    availableConnectionsForProvider: [connection],
+  });
+  openModelList();
+  expect(optionLabels()).toEqual([
+    "Claude Opus (subscription)",
+    "Claude Sonnet (subscription)",
+    "Claude Haiku (subscription)",
+  ]);
+});

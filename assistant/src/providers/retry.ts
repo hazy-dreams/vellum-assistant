@@ -3,6 +3,7 @@ import {
   selectWinningProfile,
 } from "../config/llm-resolver.js";
 import { getConfig } from "../config/loader.js";
+import { unknownLlmProviderIssue } from "../config/schemas/llm.js";
 import {
   resolveUsageAttribution,
   sanitizeUsageMetadataValue,
@@ -91,6 +92,7 @@ const PROMPT_CACHE_KEY_PROVIDERS = new Set([
 
 /** Providers that support the `effort` config (extended thinking / reasoning). */
 const EFFORT_SUPPORTED_PROVIDERS = new Set([
+  "claude-agent-sdk",
   "anthropic",
   "openai",
   "openrouter",
@@ -142,6 +144,7 @@ function disabledThinkingForcesEffortNone(
  * `thinkingConfig.thinkingLevel`.
  */
 const THINKING_AWARE_PROVIDERS = new Set([
+  "claude-agent-sdk",
   "anthropic",
   "openrouter",
   "vercel-ai-gateway",
@@ -1361,6 +1364,47 @@ export class RetryProvider implements Provider {
       forwardUsageAttributionHeaders:
         this.options.forwardUsageAttributionHeaders === true,
     });
+
+    const requestConfig = options?.config;
+    if (this.name !== "claude-agent-sdk" && requestConfig?.callSite) {
+      const resolved = resolveCallSiteConfig(
+        requestConfig.callSite,
+        getConfig().llm,
+        {
+          overrideProfile: requestConfig.overrideProfile,
+          forceOverrideProfile: requestConfig.forceOverrideProfile,
+          selectionSeed: requestConfig.selectionSeed,
+          isResolvableProvider: dispatchProviderResolvable,
+        },
+      );
+      const selectedProvider =
+        unknownLlmProviderIssue(resolved.provider) === null
+          ? resolved.provider
+          : (
+              await import("./connection-resolution.js")
+            ).resolveEntryProviderKind(resolved.provider, resolved.model);
+      if (selectedProvider === "claude-agent-sdk") {
+        throw new ProviderError(
+          "Claude subscription was selected but its SDK connection was not resolved. No API provider was used.",
+          "claude-agent-sdk",
+          400,
+        );
+      }
+    }
+
+    // Claude's SDK owns retries and subscription authentication. A subscription
+    // send must never consult an API backup or a remembered API fallback route.
+    if (this.name === "claude-agent-sdk") {
+      try {
+        return await this.inner.sendMessage(
+          messagesForAttempt,
+          normalizedOptions,
+        );
+      } catch (error) {
+        this.attributeCredential(error);
+        throw error;
+      }
+    }
 
     // Only a request that can actually take the backup consults the circuit
     // breaker: it needs a wired escalation hook (BYOK, oauth-subscription, and

@@ -3,6 +3,8 @@
  * based on the selected provider and model.
  */
 
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
+
 import {
   getModelsForProvider,
   type LlmCatalogModel,
@@ -224,6 +226,10 @@ export function resolveProfileParamVisibility(
 ): ProfileParamVisibility {
   if (!provider || !model) {
     return VISIBILITY_NONE;
+  }
+
+  if (provider === CLAUDE_AGENT_SDK_PROVIDER) {
+    return { ...VISIBILITY_NONE, effort: model === "opus" || model === "sonnet" };
   }
 
   // The chatgpt identity dispatches through the OpenAI Responses adapter

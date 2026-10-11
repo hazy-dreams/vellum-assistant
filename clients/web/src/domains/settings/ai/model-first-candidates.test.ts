@@ -332,3 +332,26 @@ describe("customModelProviderCandidates", () => {
     expect(providersOf(candidates)).not.toContain("ollama");
   });
 });
+
+
+test("Claude subscription aliases are separate from API-credit models", () => {
+  const options = resolveModelFirstOptions(input([]));
+  const subscription = options.find(
+    (option) => option.displayName === "Claude Sonnet (subscription)",
+  );
+  expect(subscription?.candidates).toHaveLength(1);
+  expect(subscription?.candidates[0]).toMatchObject({
+    provider: "claude-agent-sdk",
+    modelId: "sonnet",
+    setup: "set-up",
+    connected: false,
+  });
+  expect(
+    options.some((option) => option.displayName === "Claude Sonnet 4.6"),
+  ).toBe(true);
+  expect(
+    resolveModelFirstOptions(
+      input([], { activeAssistantIsSelfHosted: false }),
+    ).some((option) => option.displayName === "Claude Sonnet (subscription)"),
+  ).toBe(false);
+});

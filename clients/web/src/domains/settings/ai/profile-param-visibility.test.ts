@@ -293,3 +293,16 @@ describe("geminiThinkingLevels", () => {
     ]);
   });
 });
+
+
+test("Claude SDK exposes effort without API sampling or invented token ceilings", () => {
+  for (const model of ["opus", "sonnet"]) {
+    expect(resolveProfileParamVisibility("claude-agent-sdk", model)).toEqual({
+      ...VISIBILITY_NONE,
+      effort: true,
+    });
+  }
+  expect(resolveProfileParamVisibility("claude-agent-sdk", "haiku")).toEqual(
+    VISIBILITY_NONE,
+  );
+});

@@ -2,8 +2,10 @@ import type { AnsweredQuestion } from "../api/events/question-answered.js";
 import type { ToolActivityMetadata } from "../api/events/tool-result.js";
 import { resolveCallSiteConfig } from "../config/llm-resolver.js";
 import { getConfig } from "../config/loader.js";
-import type { LLMCallSite } from "../config/schemas/llm.js";
-import { SEND_USER_MESSAGE_TOOL_NAME } from "../config/send-user-message-constants.js";
+import {
+  type LLMCallSite,
+  unknownLlmProviderIssue,
+} from "../config/schemas/llm.js";
 import { recordEstimate } from "../context/estimator-calibration.js";
 import { preModelCallSanitize } from "../context/outbound-sanitize.js";
 import { stripInjectionsForCompaction } from "../context/strip-injections.js";
@@ -89,6 +91,10 @@ import {
   isUserTerminalHistoryError,
 } from "./history-repair/history-repair.js";
 import { buildToolResultFollowUp } from "./tool-result-follow-up.js";
+import {
+  deliveredUserMessage,
+  reportsOutcomeToUser,
+} from "./user-message-outcome.js";
 
 const log = getLogger("agent-loop");
 
@@ -96,30 +102,6 @@ const log = getLogger("agent-loop");
 const SEND_USER_MESSAGE_CHECK = "send_user_message_delivery";
 const MAX_CONSECUTIVE_UNPARSEABLE_TOOL_TURNS = 3;
 const SKILL_EXECUTE_TOOL_NAME = "skill_execute";
-
-/**
- * The user-facing message a `send_user_message` block carries, or null when
- * the block is not one or carries nothing usable.
- *
- * One predicate for the two readers that must agree: what gets streamed to the
- * user, and what counts as having told them the outcome. A call whose
- * `message` is blank or not a string is rejected by the executor and streams
- * nothing, so counting it as delivery would suppress the raw-text fallback on
- * a later turn and leave the user with no reply at all.
- */
-function deliveredUserMessage(block: {
-  type: string;
-  name?: string;
-  input?: Record<string, unknown>;
-}): string | null {
-  if (block.type !== "tool_use" || block.name !== SEND_USER_MESSAGE_TOOL_NAME) {
-    return null;
-  }
-  const message = block.input?.["message"];
-  return typeof message === "string" && message.trim().length > 0
-    ? message
-    : null;
-}
 
 /**
  * Count one outcome of the tool-gated reply surface: the model was nudged for
@@ -139,32 +121,6 @@ function recordSendUserMessageOutcome(
   } catch {
     // Telemetry must not affect the turn.
   }
-}
-
-/**
- * Whether a response reported the OUTCOME of the work before it: it called
- * tools, and every one of them delivered a message to the user.
- *
- * `undefined` when the response called no tools, which is the terminal one and
- * leaves the answer where the last tool-bearing response left it.
- *
- * One rule, read by the loop's own fallback decision and handed to the
- * `post-model-call` hook chain on the context, so the plugin that owns the
- * nudge cannot reach a different answer than the loop that owns the fallback.
- * A plugin cannot import this (plugins are self-contained), so the host
- * computes it and passes the answer.
- */
-function reportsOutcomeToUser(
-  toolUseBlocks: ReadonlyArray<{
-    type: string;
-    name?: string;
-    input?: Record<string, unknown>;
-  }>,
-): boolean | undefined {
-  if (toolUseBlocks.length === 0) {
-    return undefined;
-  }
-  return toolUseBlocks.every((block) => deliveredUserMessage(block) !== null);
 }
 
 /** Fraction of the preflight budget at which a checkpoint triggers mid-loop compaction. */
@@ -2371,6 +2327,72 @@ export class AgentLoop {
               { err: preparedError },
               "Prepared model-call observer failed; continuing with provider dispatch",
             );
+          }
+        }
+
+        // An SDK profile selects a complete agent runtime, rather than a
+        // Messages API adapter. Keep the normal route/prompt hooks above it
+        // and the existing conversation event/teardown contract around it.
+        if (!providerCallSite && this.provider.name === "claude-agent-sdk") {
+          throw new ProviderError(
+            "Claude subscription agent runs require a named inference call site",
+            "claude-agent-sdk",
+          );
+        }
+        if (providerCallSite) {
+          const resolved = resolveCallSiteConfig(
+            providerCallSite,
+            getConfig().llm,
+            {
+              overrideProfile:
+                typeof providerConfig.overrideProfile === "string"
+                  ? providerConfig.overrideProfile
+                  : undefined,
+              forceOverrideProfile:
+                providerConfig.forceOverrideProfile === true,
+              selectionSeed: this.conversationId,
+            },
+          );
+          const providerKind =
+            unknownLlmProviderIssue(resolved.provider) === null
+              ? resolved.provider
+              : (
+                  await import("../providers/connection-resolution.js")
+                ).resolveEntryProviderKind(resolved.provider, resolved.model);
+          if (providerKind === "claude-agent-sdk") {
+            const { runClaudeSdkAgent } =
+              await import("./claude-sdk/runtime.js");
+            const priorNewMessages = history.slice(newMessagesStart);
+            const result = await runClaudeSdkAgent({
+              run: { ...options, messages: sanitizedHistory },
+              canonicalMessages: history,
+              conversationId: this.conversationId,
+              conversationDir,
+              systemPrompt: providerOptions.systemPrompt ?? "",
+              tools: attachNativeWebSearch
+                ? currentTools.filter((tool) => tool !== NATIVE_WEB_SEARCH_TOOL)
+                : currentTools,
+              toolExecutor: this.toolExecutor,
+              model: runModel?.trim() || resolved.model,
+              effort: resolved.effort,
+              thinking: resolved.thinking,
+              maxTokens: resolved.maxTokens,
+              deferAssistantOutput,
+              resolveTools: this.resolveTools ?? undefined,
+              onToolsSent: this.onToolsSent ?? undefined,
+            });
+            // Retain the caller's canonical input; transport sanitization is
+            // not a history migration.
+            history.splice(0, history.length, ...result.history);
+            await runTerminalStop(result.reason, {
+              emitExit: result.reason !== "checkpoint_handoff",
+              ...(result.error ? { error: result.error } : {}),
+            });
+            return {
+              history,
+              exitReason: result.exitReason,
+              newMessages: [...priorNewMessages, ...result.newMessages],
+            };
           }
         }
 

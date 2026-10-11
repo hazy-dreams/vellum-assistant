@@ -6148,6 +6148,7 @@ paths:
                 provider:
                   type: string
                   enum:
+                    - claude-agent-sdk
                     - anthropic
                     - openai
                     - gemini
@@ -14612,6 +14613,8 @@ paths:
                         type: boolean
                       composerSettings:
                         type: boolean
+                      claudeAgentSdk:
+                        type: boolean
                     required:
                       - memoryOptOut
                       - retryLastTurn
@@ -14849,6 +14852,8 @@ paths:
                       chatsSettings:
                         type: boolean
                       composerSettings:
+                        type: boolean
+                      claudeAgentSdk:
                         type: boolean
                     required:
                       - memoryOptOut
@@ -17116,9 +17121,9 @@ paths:
           schema:
             type: string
           description:
-            "Filter by provider id. One of: anthropic, openai, gemini, ollama, fireworks, together, openrouter,
-            vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet, poolside,
-            typesafe, vellum"
+            "Filter by provider id. One of: claude-agent-sdk, anthropic, openai, gemini, ollama, fireworks, together,
+            openrouter, vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet,
+            poolside, typesafe, vellum"
       responses:
         "200":
           description: Successful response
@@ -17389,9 +17394,9 @@ paths:
           schema:
             type: string
           description:
-            "Filter by provider. One of: anthropic, openai, gemini, ollama, fireworks, together, openrouter,
-            vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet, poolside,
-            typesafe, vellum, chatgpt"
+            "Filter by provider. One of: claude-agent-sdk, anthropic, openai, gemini, ollama, fireworks, together,
+            openrouter, vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet,
+            poolside, typesafe, vellum, chatgpt"
       responses:
         "200":
           description: Successful response
@@ -39073,6 +39078,16 @@ components:
                         - type: "null"
                   additionalProperties: {}
                 - type: "null"
+            claudeAgentSdk:
+              anyOf:
+                - type: object
+                  properties:
+                    executablePath:
+                      anyOf:
+                        - type: string
+                          minLength: 1
+                        - type: "null"
+                - type: "null"
             profiles:
               type: object
               propertyNames:
@@ -39556,6 +39571,7 @@ components:
     ConnectionProvider:
       type: string
       enum:
+        - claude-agent-sdk
         - anthropic
         - openai
         - gemini
@@ -39823,6 +39839,7 @@ components:
                 provider:
                   type: string
                   enum:
+                    - claude-agent-sdk
                     - anthropic
                     - openai
                     - gemini
@@ -39842,6 +39859,15 @@ components:
                   minLength: 1
               required:
                 - provider
+              additionalProperties: false
+            claudeAgentSdk:
+              type: object
+              properties:
+                executablePath:
+                  anyOf:
+                    - type: string
+                      minLength: 1
+                    - type: "null"
               additionalProperties: false
             profiles:
               type: object
@@ -40212,6 +40238,7 @@ components:
           anyOf:
             - type: string
               enum:
+                - claude-agent-sdk
                 - anthropic
                 - openai
                 - gemini

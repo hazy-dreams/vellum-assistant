@@ -21,6 +21,13 @@ const PROVIDER_DEFAULT_MODELS: Record<string, string> = Object.fromEntries(
 // (other keys get HTTP 404 "no longer available to new users"), so the
 // gemini column skips it.
 const PROVIDER_MODEL_INTENTS: Record<string, Record<ModelIntent, string>> = {
+  "claude-agent-sdk": {
+    balanced: "sonnet",
+    "cost-optimized": "haiku",
+    "latency-optimized": "haiku",
+    "quality-optimized": "opus",
+    "vision-optimized": "opus",
+  },
   anthropic: {
     balanced: "claude-sonnet-4-6",
     "cost-optimized": "claude-haiku-4-5-20251001",

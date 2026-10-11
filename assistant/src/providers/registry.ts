@@ -223,7 +223,10 @@ export async function initializeProviders(
     let apiKey = "";
     let baseURL: string | undefined;
     let source: "user-key" | "managed-proxy" = "user-key";
-    if (isKeyless) {
+    if (entry.id === "claude-agent-sdk") {
+      // Authentication is checked before each SDK query, never at startup.
+      apiKey = "";
+    } else if (isKeyless) {
       const key = await getProviderKeyAsync(entry.id);
       const isConfiguredMainAgent = mainAgentProvider === entry.id;
       if (!key && !isConfiguredMainAgent) {

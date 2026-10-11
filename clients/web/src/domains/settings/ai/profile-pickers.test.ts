@@ -465,3 +465,28 @@ describe("managedProfileModelName", () => {
     ).toBe("not-in-the-catalog");
   });
 });
+
+
+test("subscription and API profiles remain separate dispatchable selections", () => {
+  const entries: ProfilePickerEntry[] = [
+    {
+      name: "claude-subscription",
+      label: "Claude Sonnet (subscription)",
+      provider: "claude-agent-sdk",
+      model: "sonnet",
+    },
+    {
+      name: "claude-api",
+      label: "Claude Sonnet API",
+      provider: "anthropic",
+      model: "claude-sonnet-4.6",
+    },
+  ];
+  for (const entry of entries) {
+    expect(isDispatchableProfile(entry, entries, STRICT)).toBe(true);
+  }
+  expect(entries.map(profilePickerLabel)).toEqual([
+    "Claude Sonnet (subscription)",
+    "Claude Sonnet API",
+  ]);
+});

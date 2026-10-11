@@ -101,6 +101,12 @@ export function resolveTokenBudgetStateForModel(
   model: LlmCatalogModel,
   state: InferenceTokenBudgetState,
 ): InferenceTokenBudgetState {
+  if (
+    model.contextWindowTokens === undefined ||
+    model.maxOutputTokens === undefined
+  ) {
+    return state;
+  }
   const contextBudget = state.contextWindowTouched
     ? state.contextWindowTokens
     : model.defaultContextWindowTokens;

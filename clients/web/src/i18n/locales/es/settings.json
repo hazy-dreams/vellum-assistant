@@ -2435,5 +2435,20 @@
     "checkingDescription": "Comprobando el permiso de notificaciones…",
     "openTabDescription": "Mantén una pestaña de Vellum abierta para recibir avisos. Cerrar o suspender la pestaña, o perder la conexión, pausa la entrega.",
     "enable": "Activar notificaciones"
+  },
+  "claudeAgentSdkSettings": {
+    "description": "Usa Claude Agent SDK con tu sesión existente de Claude Code. Instala Claude Code e inicia sesión con tu suscripción de Claude en el mismo equipo que ejecuta este asistente. Vellum no inicia la sesión ni solicita un token.",
+    "billing": "Usa los límites de tu suscripción de Claude. No cambiará a créditos de API de pago si la suscripción no está disponible. El proveedor predeterminado se aplica a las solicitudes sin una configuración específica. Los perfiles de chat y las tareas en segundo plano con una configuración específica conservan sus proveedores. Claude Agent SDK no proporciona embeddings. Los embeddings de memoria mantienen su backend configurado por separado y pueden generar cargos de API o de servicios gestionados.",
+    "pathLabel": "Ruta del ejecutable de Claude Code (opcional)",
+    "pathPlaceholder": "Detección automática",
+    "pathHint": "Déjala en blanco para buscar Claude Code automáticamente. También puedes introducir la ruta absoluta del ejecutable instalado de Claude Code en el equipo del asistente. Todos los perfiles de la suscripción de Claude comparten este ajuste.",
+    "pathInvalid": "Introduce una ruta absoluta del ejecutable o déjala en blanco para la detección automática.",
+    "checkingSupport": "Comprobando la compatibilidad del asistente…",
+    "supportUnavailable": "No se pudo comprobar la compatibilidad. Vuelve a abrir los ajustes para intentarlo de nuevo.",
+    "updateRequired": "Actualiza este asistente para usar la suscripción de Claude.",
+    "loadFailed": "No se pudieron cargar los ajustes de Claude Code. Vuelve a abrir los ajustes para intentarlo de nuevo.",
+    "saveFailed": "No se pudo guardar la ruta de Claude Code. El proveedor no se ha guardado. Inténtalo de nuevo.",
+    "rowMeta": "Suscripción de Claude · Sesión local de Claude Code",
+    "retry": "Intentar de nuevo"
   }
 }

@@ -23,6 +23,7 @@ import type { DrizzleDb } from "../../persistence/db-connection.js";
 import { credentialKey } from "../../security/credential-key.js";
 import { getLogger } from "../../util/logger.js";
 import { isConnectionCompatibleWithModel } from "../connection-model-compat.js";
+import { PROVIDER_CATALOG } from "../model-catalog.js";
 import { MANAGED_ROUTABLE_PROVIDERS } from "../vellum-model-routing.js";
 import {
   PROVIDERS_REQUIRING_BASE_URL_AND_MODELS,
@@ -236,12 +237,14 @@ function ensureProviderConnection(
     connectionName = VELLUM_MANAGED_CONNECTION_NAME;
   } else {
     // "your-own" path (or provider not managed-supported): ensure a
-    // personal connection exists. Ollama is keyless, so it gets
-    // `auth: { type: "none" }`; everything else gets an api_key
+    // personal connection exists. Keyless providers get
+    // `auth: { type: "none" }`; other providers get an api_key
     // pointing at the conventional credential slot.
     connectionName = `${provider}-personal`;
     if (!getConnection(db, connectionName)) {
-      const isKeyless = provider === "ollama";
+      const isKeyless = PROVIDER_CATALOG.some(
+        (entry) => entry.id === provider && entry.setupMode === "keyless",
+      );
       const credName = credentialKey(provider, "api_key");
       const result = createConnection(db, {
         name: connectionName,

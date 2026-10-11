@@ -1,0 +1,107 @@
+# Claude subscription runtime
+
+`claude-agent-sdk` is a separate provider/profile choice from the Anthropic API
+provider. It uses `@anthropic-ai/claude-agent-sdk` 0.3.296 with an existing,
+unmodified Claude Code installation on the assistant host. There is no token
+import, OAuth proxy, API-key conversion, or Vellum-hosted login flow.
+
+## Boundaries
+
+- `agent/loop.ts` resolves the ordinary call-site/profile configuration before
+  dispatching an SDK agent turn. Conversation turns, scheduled wakes, subagents
+  using Conversation, and workflow tool leaves share this dispatch boundary.
+- `agent/claude-sdk/runtime.ts` owns one SDK query lifecycle. Claude owns its
+  model/tool iteration and internal compaction. Vellum owns its existing
+  executor, permissions, plugin tool hooks, canonical history and client events.
+- `tools.ts` exposes only the supplied Vellum tools through an in-process MCP
+  server. Built-in tools, external MCP configuration, local skills and plugins
+  are disabled. Organization-managed Claude Code policy hooks can still run
+  outside the Vellum executor; Vellum does not override organization policy.
+  A provenance check and an invocation-ID/input match precede
+  execution. Duplicate IDs share one execution; exclusive-tool siblings are
+  deferred. The pinned SDK server's `disableAutoBackground` flag keeps real
+  tool completion ahead of the next inference round.
+- The pre-model hook runs at the Vellum dispatch boundary. Post-model and
+  post-tool hooks run for streamed SDK messages and Vellum tool results.
+  Hook-added tools use the same executor. Model-only hook guidance stays out of
+  client tool output. Append-only continuation nudges are supported; rewriting
+  earlier history during an active SDK query fails explicitly, rather than
+  silently losing the rewrite or replaying actions.
+- SDK internal rounds do not re-run the Vellum pre-model context preparation or
+  its mid-loop compactor. Confirmed profile changes take effect on a subsequent
+  Vellum dispatch. These are explicit integration boundaries, not claims of
+  interchangeable internal loop behavior.
+- `providers/claude-agent-sdk/client.ts` handles auxiliary inference through
+  bounded, tool-free SDK queries, including structured output. It does not use
+  an API model to title, classify, or select memory behind a subscription
+  profile. Deliberate call-site/profile overrides remain authoritative.
+
+## Authentication and billing
+
+`auth.ts` resolves the installed executable and runs read-only version and
+`auth status` probes with the same working directory and restricted environment
+used for inference. API/cloud/federation/token overrides are rejected. No
+credential file or keychain contents are read by Vellum. Diagnostics do not
+return raw auth output or account identifiers.
+
+The supported baseline is Claude Code 2.1.296, paired in the pinned SDK release.
+Vellum rejects older, prerelease, or unrecognized versions. Newer stable versions
+pass the minimum check; this does not mean every later release was tested, or
+that Anthropic universally requires this minimum for all SDK uses.
+
+Subscription limits and account-level extra-usage settings still apply. This is
+not a spending cap or a promise of zero incremental charges. A subscription
+failure does not authorize routing to a paid API. Existing explicit API profile
+and call-site overrides can still incur their normal charges. Saving a profile
+skips the model-generation validation probe.
+
+The SDK does not provide embeddings. Memory embedding generation keeps its
+separately configured `memory.embeddings` backend, which may use local models
+or incur API/managed charges. Changing the LLM profile does not change that
+service or make the whole assistant subscription-only. Voice transcription and
+synthesis likewise retain their separately configured services and billing.
+
+## History, resume and interruption
+
+Vellum persists only a session mapping, message hashes and an in-flight marker
+in `.claude-sdk-session.json` within its conversation directory. Native Claude
+transcripts remain managed by Claude Code. Resume requires an exact canonical
+history prefix and matching runtime fingerprint. Dirty, aborted, changed or
+forked sessions rebuild from labelled history on a new user request; the same
+interrupted prompt is never automatically replayed.
+
+Historical tools/results are inert context when bootstrapping a session. Current
+images and PDFs use the SDK's native content blocks. Vellum memory injections
+remain part of its prepared conversation context; Claude Code automatic memory
+is disabled. Cancellation closes the query, bounds tool settlement and records
+an unknown outcome for abandoned calls so clients do not assume they failed
+without effects. Late results cannot mutate the next turn.
+
+## License and distribution
+
+The SDK is not MIT-licensed. Its package notice is:
+
+> © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements
+> outlined here: https://code.claude.com/docs/en/legal-and-compliance.
+
+The package and bundled Claude Code artifacts retain their upstream notices.
+Installing this dependency does not change Vellum's repository license, grant
+Anthropic partnership/approval, or establish redistribution rights beyond those
+terms. This integration selects a separately installed, unmodified Claude Code
+binary; it does not patch that binary. Review the linked terms before shipping
+or redistributing an application containing the dependency.
+
+## Verification
+
+Tests use injected SDK transports, synthetic events and an in-memory MCP client.
+They do not sign in, read credentials, or make paid/subscription model calls.
+Auth, inference, session integrity, permissions, event ordering, cancellation,
+profile routing and UI settings have focused tests. Real Claude login, live
+model/tool streaming, OS packaging and end-to-end scheduled wake/resume remain
+manual validation requirements before release. The draft is not a live parity
+certification.
+
+Official references: [SDK TypeScript reference](https://code.claude.com/docs/en/agent-sdk/typescript),
+[custom tools](https://code.claude.com/docs/en/agent-sdk/custom-tools),
+[sessions](https://code.claude.com/docs/en/agent-sdk/sessions), and
+[SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md).

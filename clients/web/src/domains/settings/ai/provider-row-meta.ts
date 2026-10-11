@@ -1,7 +1,9 @@
+import { t } from "@/i18n";
 import { getModelsForProvider } from "@/assistant/llm-model-catalog";
 import { codexServableModels } from "@/domains/settings/ai/codex-subscription-models";
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   VELLUM_CONNECTION_PROVIDER,
 } from "@/domains/settings/ai/constants";
 import type {
@@ -15,6 +17,7 @@ export type DefaultProviderId = NonNullable<DefaultProviderStatus["provider"]>;
 // from the daemon's default-provider enum fails compilation here.
 const DEFAULT_PROVIDER_ELIGIBLE: Record<DefaultProviderId, true> = {
   anthropic: true,
+  "claude-agent-sdk": true,
   openai: true,
   gemini: true,
   fireworks: true,
@@ -88,6 +91,9 @@ function authMeta(conn: ProviderConnection): string | null {
  * meta for a custom provider.
  */
 export function providerRowMeta(conn: ProviderConnection): string {
+  if (conn.provider === CLAUDE_AGENT_SDK_PROVIDER) {
+    return t("settings:claudeAgentSdkSettings.rowMeta");
+  }
   if (conn.provider === VELLUM_CONNECTION_PROVIDER) {
     return "Included with your plan";
   }

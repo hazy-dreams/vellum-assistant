@@ -20,6 +20,7 @@ import {
 } from "@/assistant/llm-model-catalog";
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   OPENAI_COMPATIBLE_PROVIDER,
   VELLUM_CONNECTION_PROVIDER,
 } from "@/domains/settings/ai/constants";
@@ -755,6 +756,7 @@ export function useProfileEditor({
       // only when the daemon returned a provider "chatgpt" row, which only
       // daemons that understand the identity payload do.
       const writesIdentityPayload =
+        provider === CLAUDE_AGENT_SDK_PROVIDER ||
         provider === CHATGPT_CONNECTION_PROVIDER ||
         (provider === VELLUM_CONNECTION_PROVIDER &&
           (await assistantSupportsVellumProviderProfiles(assistantId)));

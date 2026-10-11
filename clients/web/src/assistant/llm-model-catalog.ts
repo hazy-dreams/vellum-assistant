@@ -12,9 +12,9 @@
 export interface LlmCatalogModel {
   id: string;
   displayName: string;
-  contextWindowTokens: number;
+  contextWindowTokens?: number;
   defaultContextWindowTokens: number;
-  maxOutputTokens: number;
+  maxOutputTokens?: number;
   /**
    * The model line this entry belongs to, when the catalog carries more than
    * one version of it ("claude-opus", "gemini-flash"). Members of a line are
@@ -177,6 +177,26 @@ export const MODELS_BY_PROVIDER = {
       contextWindowTokens: 200_000,
       defaultContextWindowTokens: 200_000,
       maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+  ],
+  "claude-agent-sdk": [
+    {
+      id: "opus",
+      displayName: "Claude Opus (subscription)",
+      defaultContextWindowTokens: 200_000,
+      supportsThinking: true,
+    },
+    {
+      id: "sonnet",
+      displayName: "Claude Sonnet (subscription)",
+      defaultContextWindowTokens: 200_000,
+      supportsThinking: true,
+    },
+    {
+      id: "haiku",
+      displayName: "Claude Haiku (subscription)",
+      defaultContextWindowTokens: 200_000,
       supportsThinking: true,
     },
   ],
@@ -1293,6 +1313,7 @@ export const MODELS_BY_PROVIDER = {
 export type LlmProviderId = keyof typeof MODELS_BY_PROVIDER;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<LlmProviderId, string> = {
+  "claude-agent-sdk": "sonnet",
   anthropic: "claude-opus-4-8",
   openai: "gpt-5.5",
   gemini: "gemini-2.5-flash",
@@ -1323,6 +1344,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   // `vellum` is also the catalog owner of Vellum-hosted GPU models.
   vellum: "Vellum",
   chatgpt: "ChatGPT Subscription",
+  "claude-agent-sdk": "Claude subscription",
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Google Gemini",
@@ -1380,6 +1402,7 @@ export function vendorDisplayName(vendor: string): string {
  * Missing entries are treated as `false`.
  */
 export const PROVIDER_SUPPORTS_PLATFORM_AUTH: Record<string, boolean> = {
+  "claude-agent-sdk": false,
   anthropic: true,
   openai: true,
   gemini: true,

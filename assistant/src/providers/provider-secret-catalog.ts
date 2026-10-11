@@ -43,13 +43,14 @@ import { listCredentialProviderNames as listSttCredentialProviderNames } from ".
  * about the set of bare-name credential-store keys accepted by
  * `assistant keys ...`. `vellum` is excluded: those models authenticate
  * with the assistant API key on the managed connection, not a user key.
+ * `claude-agent-sdk` is excluded because Claude Code owns its subscription sign-in.
  *
  * Search providers (`brave`, `perplexity`, `tavily`) have no catalog module
  * yet and remain statically declared below.
  */
 const LLM_API_KEY_PROVIDERS: readonly string[] = PROVIDER_CATALOG.map(
   (p) => p.id,
-).filter((id) => id !== "vellum");
+).filter((id) => id !== "vellum" && id !== "claude-agent-sdk");
 
 /**
  * Search API providers, derived from `SEARCH_PROVIDER_CATALOG`. Managed

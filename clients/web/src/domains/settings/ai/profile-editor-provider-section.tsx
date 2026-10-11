@@ -22,6 +22,7 @@ import {
 } from "@/domains/settings/ai/codex-subscription-models";
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   OPENAI_COMPATIBLE_PROVIDER,
   VELLUM_CONNECTION_PROVIDER,
 } from "@/domains/settings/ai/constants";
@@ -141,6 +142,7 @@ export function ProfileEditorProviderSection({
   const allowsCustomModel =
     provider !== "" &&
     provider !== CHATGPT_CONNECTION_PROVIDER &&
+    provider !== CLAUDE_AGENT_SDK_PROVIDER &&
     !subscriptionRestricted;
 
   // Switching providers reopens the field on the new provider's model list;

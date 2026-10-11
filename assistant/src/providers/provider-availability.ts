@@ -21,6 +21,12 @@ import { API_KEY_PROVIDERS } from "./provider-secret-catalog.js";
  * Ollama is always considered available because it does not require an API key.
  */
 export async function isProviderAvailable(provider: string): Promise<boolean> {
+  if (provider === "claude-agent-sdk") {
+    return (
+      Bun.which(getConfig().llm.claudeAgentSdk?.executablePath ?? "claude") !==
+      null
+    );
+  }
   if (provider === "ollama") {
     return true;
   }
@@ -56,6 +62,9 @@ export async function getConfiguredProviders(): Promise<string[]> {
     if (await isProviderAvailable(p)) {
       configured.push(p);
     }
+  }
+  if (await isProviderAvailable("claude-agent-sdk")) {
+    configured.push("claude-agent-sdk");
   }
   if (!configured.includes("ollama")) {
     configured.push("ollama");
