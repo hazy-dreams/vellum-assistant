@@ -71,6 +71,41 @@ or incur API/managed charges. Changing the LLM profile does not change that
 service or make the whole assistant subscription-only. Voice transcription and
 synthesis likewise retain their separately configured services and billing.
 
+## Provider settings and accounting
+
+Root dispatch validates the selected connection through the same configured-
+provider boundary as other inference. An unavailable SDK connection is reported
+before the SDK starts; it is not silently run through the auxiliary adapter.
+Shared provider fallback rules are unchanged.
+
+Root and auxiliary requests share effort/thinking normalization. Claude's effort
+levels are `low`, `medium`, `high`, `xhigh`, and `max`; the profile picker offers
+only levels reported by discovery. Legacy `none` or disabled-thinking settings
+without an explicit effort become `low`, a latency preference rather than a
+promise that thinking is disabled. Explicit effort wins over a legacy thinking
+toggle. Generic thinking hints leave model-specific defaults to Claude Code;
+explicit fixed thinking budgets remain explicit. Claude Code applies its native
+model-specific effort support rules. See [effort configuration](https://code.claude.com/docs/en/model-config#adjust-effort-level).
+
+The configured provider timeout is passed as milliseconds in the SDK query's
+private environment: `API_TIMEOUT_MS`, `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, and
+`CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`. Claude Code owns request deadlines, stream
+watchdogs, retries and teardown; Vellum does not put a whole-agent timer around
+MCP tools or approval waits. Native idle watchdogs are not a fixed total-response
+deadline: Claude Code clamps event-idle values to at least five minutes and
+byte-idle values to ten seconds through thirty minutes. Native request timers
+are capped at the timer-safe maximum. Auxiliary inference also retains its
+existing bounded, tool-free query timeout. See [native stream watchdogs](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs).
+
+Assistant-only frames preserve each content block while deduplicating input and
+cache usage by API message ID. Their output counts are placeholders, so final
+per-turn result usage supplies output totals after already-accounted streaming
+output is removed. Aggregates preserve call counts and the latest context size;
+mixed-model aggregates use an unknown model rather than inventing per-model
+output attribution. A failed query without a result retains known input/cache
+usage with unknown output counted as zero. Session-cumulative cost/model totals
+are not added to per-turn usage. See [SDK cost tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking).
+
 ## History, resume and interruption
 
 Vellum persists only a session mapping, message hashes and an in-flight marker

@@ -351,3 +351,193 @@ describe("Claude SDK root runtime", () => {
     ]);
   });
 });
+
+function assistantOnly(
+  id = "message-1",
+): Extract<SDKMessage, { type: "assistant" }> {
+  const event = start(id).event;
+  if (event.type !== "message_start") {
+    throw new Error("Expected start fixture");
+  }
+  return {
+    type: "assistant",
+    uuid: crypto.randomUUID(),
+    session_id: uuid,
+    parent_tool_use_id: null,
+    message: {
+      ...event.message,
+      model: "claude-resolved-model",
+      content: [{ type: "text", text: "Completed", citations: [] }],
+      stop_reason: "end_turn",
+      usage: {
+        ...usage,
+        cache_creation_input_tokens: 4,
+        cache_read_input_tokens: 5,
+      },
+    },
+  };
+}
+
+describe("Claude SDK provider-boundary regressions", () => {
+  let previousSettings: ReturnType<typeof getConfig>["llm"]["claudeAgentSdk"];
+  beforeEach(() => {
+    previousSettings = getConfig().llm.claudeAgentSdk;
+  });
+  afterEach(() => {
+    getConfig().llm.claudeAgentSdk = previousSettings;
+  });
+  test("accounts completed assistant-only replies using actual model and cache tokens", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      yield assistantOnly();
+      yield success();
+    });
+    await runClaudeSdkAgent(f.options);
+    expect(f.events.filter((event) => event.type === "usage")).toEqual([
+      expect.objectContaining({
+        inputTokens: 11,
+        outputTokens: 3,
+        cacheCreationInputTokens: 4,
+        cacheReadInputTokens: 5,
+        model: "claude-resolved-model",
+        actualProvider: "claude-agent-sdk",
+      }),
+    ]);
+    expect(
+      f.events.filter((event) => event.type === "message_complete"),
+    ).toHaveLength(1);
+  });
+
+  test("does not count final assistant echoes twice, and handles a later assistant-only message", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      yield* text().filter((event) => event.type !== "result");
+      yield assistantOnly("message-1");
+      const next = assistantOnly("message-2");
+      yield next;
+      yield next;
+      yield { ...success(), usage: { ...usage, output_tokens: 6 } };
+    });
+    await runClaudeSdkAgent(f.options);
+    expect(f.events.filter((event) => event.type === "usage")).toHaveLength(2);
+    expect(
+      f.events.filter((event) => event.type === "message_complete"),
+    ).toHaveLength(2);
+  });
+
+  test("preserves sibling content blocks while counting API inputs once and final output accurately", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      const first = assistantOnly();
+      first.message.usage.output_tokens = 999;
+      yield first;
+      const second = assistantOnly();
+      second.message.content = [
+        { type: "text", text: "Second block", citations: [] },
+      ];
+      yield second;
+      yield assistantOnly("message-2");
+      yield { ...success(), usage: { ...usage, output_tokens: 17 } };
+    });
+    await runClaudeSdkAgent(f.options);
+    expect(
+      f.events.filter((event) => event.type === "message_complete"),
+    ).toHaveLength(3);
+    expect(f.events.filter((event) => event.type === "usage")).toEqual([
+      expect.objectContaining({
+        inputTokens: 22,
+        outputTokens: 17,
+        llmCallCount: 2,
+        cacheCreationInputTokens: 8,
+        cacheReadInputTokens: 10,
+      }),
+    ]);
+  });
+
+  test("keeps latest context size and subtracts streaming output from a mixed turn", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      yield assistantOnly("fallback");
+      yield* text().filter((event) => event.type !== "result");
+      yield { ...success(), usage: { ...usage, output_tokens: 9 } };
+    });
+    await runClaudeSdkAgent(f.options);
+    expect(f.events.filter((event) => event.type === "usage")).toEqual([
+      expect.objectContaining({ inputTokens: 2, outputTokens: 3 }),
+      expect.objectContaining({
+        inputTokens: 11,
+        outputTokens: 6,
+        llmCallCount: 1,
+        lastCallInputTokens: 2,
+      }),
+    ]);
+  });
+
+  test("retains known input usage when a query fails before final output accounting", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      yield assistantOnly();
+      throw new Error("Connection closed");
+    });
+    const result = await runClaudeSdkAgent(f.options);
+    expect(result.reason).toBe("error");
+    expect(f.events.filter((event) => event.type === "usage")).toEqual([
+      expect.objectContaining({
+        inputTokens: 11,
+        outputTokens: 0,
+        llmCallCount: 1,
+      }),
+    ]);
+  });
+
+  test("normalizes saved none effort without forcing disabled thinking", async () => {
+    prepare();
+    const f = fixture(plain);
+    f.options.effort = "none";
+    f.options.thinking = { enabled: false, streamThinking: false };
+    await runClaudeSdkAgent(f.options);
+    expect(f.params[0]?.effort).toBe("low");
+    expect(f.params[0]?.thinking).toBeUndefined();
+  });
+
+  test("passes configured timeout to native requests without a whole-agent timer", async () => {
+    prepare();
+    const previous = getConfig().timeouts.providerStreamTimeoutSec;
+    const previousEnvironment = process.env.API_TIMEOUT_MS;
+    getConfig().timeouts.providerStreamTimeoutSec = 0.005;
+    try {
+      const f = fixture(async function* (options) {
+        // A native transport/tool phase can outlive the configured request wait.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(options.abortController?.signal.aborted).toBe(false);
+        yield* text();
+      });
+      const result = await runClaudeSdkAgent(f.options);
+      expect(result.error).toBeUndefined();
+      expect(f.params[0]?.env).toMatchObject({
+        API_TIMEOUT_MS: "5",
+        CLAUDE_STREAM_IDLE_TIMEOUT_MS: "5",
+        CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: "5",
+      });
+      expect(process.env.API_TIMEOUT_MS).toBe(previousEnvironment);
+      expect(f.close).toHaveBeenCalledTimes(1);
+    } finally {
+      getConfig().timeouts.providerStreamTimeoutSec = previous;
+    }
+  });
+
+  test("reports native timeout failures as provider errors and closes the query", async () => {
+    prepare();
+    const f = fixture(async function* () {
+      throw new Error("Claude API request timed out");
+      yield success();
+    });
+    const result = await runClaudeSdkAgent(f.options);
+    expect(result.reason).toBe("error");
+    expect(result.error?.message).toContain("timed out");
+    expect(
+      f.events.filter((event) => event.type === "provider_error"),
+    ).toHaveLength(1);
+    expect(f.close).toHaveBeenCalledTimes(1);
+  });
+});

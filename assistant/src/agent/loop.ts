@@ -47,6 +47,7 @@ import type { ContextWindowResult } from "../plugins/defaults/compaction/window-
 import { runHook } from "../plugins/pipeline.js";
 import type { CompactionCircuitEvent } from "../plugins/types.js";
 import { hasVisibleText } from "../providers/content-blocks.js";
+import { dispatchProviderResolvable } from "../providers/provider-resolvability.js";
 import { isMaxTokensStopReason } from "../providers/stop-reasons.js";
 import { normalizeThinkingConfigForWire } from "../providers/thinking-config.js";
 import type {
@@ -439,7 +440,11 @@ export type AgentEvent =
     }
   | {
       type: "usage";
+      /** Number of provider calls represented by aggregate SDK usage; otherwise one. */
+      llmCallCount?: number;
       inputTokens: number;
+      /** Input size of the latest call when inputTokens aggregates multiple calls. */
+      lastCallInputTokens?: number;
       outputTokens: number;
       cacheCreationInputTokens?: number;
       cacheReadInputTokens?: number;
@@ -2340,31 +2345,52 @@ export class AgentLoop {
           );
         }
         if (providerCallSite) {
-          const resolved = resolveCallSiteConfig(
+          const resolutionOptions = {
+            overrideProfile:
+              typeof providerConfig.overrideProfile === "string"
+                ? providerConfig.overrideProfile
+                : undefined,
+            forceOverrideProfile: providerConfig.forceOverrideProfile === true,
+            selectionSeed: this.conversationId,
+            isResolvableProvider: dispatchProviderResolvable,
+          };
+          const selected = resolveCallSiteConfig(
             providerCallSite,
             getConfig().llm,
-            {
-              overrideProfile:
-                typeof providerConfig.overrideProfile === "string"
-                  ? providerConfig.overrideProfile
-                  : undefined,
-              forceOverrideProfile:
-                providerConfig.forceOverrideProfile === true,
-              selectionSeed: this.conversationId,
-            },
+            resolutionOptions,
           );
-          const providerKind =
-            unknownLlmProviderIssue(resolved.provider) === null
-              ? resolved.provider
+          const selectedKind =
+            unknownLlmProviderIssue(selected.provider) === null
+              ? selected.provider
               : (
                   await import("../providers/connection-resolution.js")
-                ).resolveEntryProviderKind(resolved.provider, resolved.model);
-          if (providerKind === "claude-agent-sdk") {
+                ).resolveEntryProviderKind(selected.provider, selected.model);
+          // A full SDK run requires a validated connection before bypassing
+          // the ordinary provider send path.
+          const configured =
+            selectedKind === "claude-agent-sdk"
+              ? await (
+                  await import("../providers/provider-send-message.js")
+                ).resolveConfiguredProvider(providerCallSite, resolutionOptions)
+              : null;
+          if (selectedKind === "claude-agent-sdk" && !configured) {
+            throw new ProviderError(
+              "Claude subscription connection is unavailable. Check the selected inference profile's connection.",
+              "claude-agent-sdk",
+            );
+          }
+          if (configured?.provider.name === "claude-agent-sdk") {
+            const resolved = configured.resolvedConfig;
             const { runClaudeSdkAgent } =
               await import("./claude-sdk/runtime.js");
             const priorNewMessages = history.slice(newMessagesStart);
             const result = await runClaudeSdkAgent({
-              run: { ...options, messages: sanitizedHistory },
+              run: {
+                ...options,
+                messages: sanitizedHistory,
+                overrideProfile: resolutionOptions.overrideProfile,
+                forceOverrideProfile: resolutionOptions.forceOverrideProfile,
+              },
               canonicalMessages: history,
               conversationId: this.conversationId,
               conversationDir,

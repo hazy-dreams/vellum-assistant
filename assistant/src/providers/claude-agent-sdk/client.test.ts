@@ -129,6 +129,9 @@ describe("Claude subscription auxiliary provider", () => {
     const options = f.calls[0].options;
     expect(options.pathToClaudeCodeExecutable).toBe("/usr/local/bin/claude");
     expect(options.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("128");
+    expect(options.env?.API_TIMEOUT_MS).toBe("1000");
+    expect(options.env?.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("1000");
+    expect(options.env?.CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS).toBe("1000");
     expect(options.tools).toEqual([]);
     expect(options.mcpServers).toEqual({});
     expect(options.strictMcpConfig).toBe(true);
@@ -271,8 +274,40 @@ describe("Claude subscription auxiliary provider", () => {
     });
     expect(f.calls[0].options).not.toHaveProperty("temperature");
     expect(f.calls[0].options).not.toHaveProperty("top_p");
-    expect(f.calls[0].options.thinking).toEqual({ type: "disabled" });
-    expect(f.calls[0].options.effort).toBeUndefined();
+    expect(f.calls[0].options.thinking).toBeUndefined();
+    expect(f.calls[0].options.effort).toBe("low");
+  });
+
+  test("preserves explicit effort and budgets while deferring generic thinking to Claude Code", async () => {
+    const f = fixture();
+    await f.provider.sendMessage(messages, {
+      config: { effort: "max", thinking: { type: "disabled" } },
+    });
+    expect(f.calls[0].options.effort).toBe("max");
+    expect(f.calls[0].options.thinking).toBeUndefined();
+    await f.provider.sendMessage(messages, {
+      config: { thinking: { enabled: true } },
+    });
+    expect(f.calls[1].options.thinking).toBeUndefined();
+    expect(f.calls[1].options.effort).toBeUndefined();
+    await f.provider.sendMessage(messages, {
+      config: { thinking: { type: "enabled", budget_tokens: 2048 } },
+    });
+    expect(f.calls[2].options.thinking).toEqual({
+      type: "enabled",
+      budgetTokens: 2048,
+    });
+  });
+
+  test("validates thinking before authentication or generation", async () => {
+    const f = fixture();
+    await expect(
+      f.provider.sendMessage(messages, {
+        config: { thinking: { type: "enabled", budget_tokens: 0 } },
+      }),
+    ).rejects.toThrow("Unsupported Claude subscription effort or thinking");
+    expect(f.preflight).not.toHaveBeenCalled();
+    expect(f.calls).toHaveLength(0);
   });
 
   test("rejects unknown request semantics and honors single-tool choices", async () => {
@@ -318,7 +353,8 @@ describe("Claude subscription auxiliary provider", () => {
       },
     });
     expect(router.calls[0].options.model).toBe("haiku");
-    expect(router.calls[0].options.thinking).toEqual({ type: "disabled" });
+    expect(router.calls[0].options.thinking).toBeUndefined();
+    expect(router.calls[0].options.effort).toBe("low");
     const pool = fixture();
     await new RetryProvider(pool.provider).sendMessage(messages, {
       config: {
@@ -330,16 +366,17 @@ describe("Claude subscription auxiliary provider", () => {
     });
     expect(pool.calls[0].options.model).toBe("sonnet");
     expect(pool.calls[0].options.effort).toBe("low");
-    expect(pool.calls[0].options.thinking).toEqual({ type: "disabled" });
+    expect(pool.calls[0].options.thinking).toBeUndefined();
     setConfig("llm", {});
   });
 
   test("enforces real reply-suggestion stop sequences before text events", async () => {
+    setConfig("llm", { defaultProvider: { provider: "claude-agent-sdk" } });
     const f = fixture([
       success({ result: "<reply>See you 🙂</reply>unwanted suffix" }),
     ]);
     const events: string[] = [];
-    const response = await f.provider.sendMessage(messages, {
+    const response = await new RetryProvider(f.provider).sendMessage(messages, {
       tools: [],
       config: {
         callSite: "replySuggestion",
@@ -363,6 +400,9 @@ describe("Claude subscription auxiliary provider", () => {
     expect(events).toEqual(["<reply>See you 🙂"]);
     expect(f.calls[0].options).not.toHaveProperty("stop_sequences");
     expect(f.calls[0].options.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("60");
+    expect(f.calls[0].options.effort).toBe("low");
+    expect(f.calls[0].options.thinking).toBeUndefined();
+    setConfig("llm", {});
   });
 
   test("rejects malformed stop sequences and schema/stop combinations before a query", async () => {

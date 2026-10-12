@@ -8,6 +8,8 @@ import type {
 import { z } from "zod";
 
 import { preflightClaudeSdkAuth } from "../../agent/claude-sdk/auth.js";
+import { resolveClaudeSdkInferenceOptions } from "../../agent/claude-sdk/inference-options.js";
+import { claudeSdkTimeoutEnvironment } from "../../agent/claude-sdk/timeout.js";
 import { getConfig } from "../../config/loader.js";
 import type { ToolDefinition } from "../../tools/tool-types.js";
 import { ProviderError } from "../../util/errors.js";
@@ -66,15 +68,6 @@ const toolChoiceSchema = z.union([
     type: z.literal("function"),
     function: z.object({ name: z.string().min(1) }),
   }),
-]);
-const thinkingSchema = z.union([
-  z.object({ type: z.literal("disabled") }),
-  z.object({ type: z.literal("adaptive") }),
-  z.object({
-    type: z.literal("enabled"),
-    budget_tokens: z.number().int().positive(),
-  }),
-  z.object({ enabled: z.boolean() }),
 ]);
 const outputFormatSchema = z.object({
   type: z.literal("json_schema"),
@@ -368,6 +361,7 @@ export class ClaudeAgentSdkProvider implements Provider {
   ): Promise<ProviderResponse> {
     options.signal?.throwIfAborted();
     const config = options.config ?? {};
+    const inferenceOptions = resolveClaudeSdkInferenceOptions(config);
     for (const [key, value] of Object.entries(config)) {
       if (value !== undefined && !supportedConfigKeys.has(key)) {
         return fail(
@@ -464,10 +458,16 @@ export class ClaudeAgentSdkProvider implements Provider {
       abortController.signal.throwIfAborted();
       const sdkOptions: Options = {
         pathToClaudeCodeExecutable: auth.executablePath,
-        env: auth.env,
+        env: {
+          ...auth.env,
+          ...claudeSdkTimeoutEnvironment(
+            this.settings.streamTimeoutMs ?? 180_000,
+          ),
+        },
         cwd: this.settings.cwd ?? process.cwd(),
         abortController,
         model: config.model ?? this.defaultModel,
+        ...inferenceOptions,
         systemPrompt: [options.systemPrompt, plan?.instruction]
           .filter(Boolean)
           .join("\n\n"),
@@ -491,23 +491,6 @@ export class ClaudeAgentSdkProvider implements Provider {
           ? { outputFormat: { type: "json_schema", schema: plan.schema } }
           : {}),
       };
-      if (config.effort === "none") {
-        sdkOptions.thinking = { type: "disabled" };
-      } else if (config.effort) {
-        sdkOptions.effort = config.effort;
-      }
-      if (config.thinking !== undefined) {
-        const thinking = thinkingSchema.safeParse(config.thinking);
-        if (!thinking.success) {
-          return fail("Unsupported Claude subscription thinking configuration");
-        }
-        sdkOptions.thinking =
-          "enabled" in thinking.data
-            ? { type: thinking.data.enabled ? "adaptive" : "disabled" }
-            : thinking.data.type === "enabled"
-              ? { type: "enabled", budgetTokens: thinking.data.budget_tokens }
-              : thinking.data;
-      }
       const runQuery =
         this.settings.query ??
         (await import("@anthropic-ai/claude-agent-sdk")).query;

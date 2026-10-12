@@ -38,11 +38,13 @@ import {
   reportsOutcomeToUser,
 } from "../user-message-outcome.js";
 import { preflightClaudeSdkAuth } from "./auth.js";
+import { resolveClaudeSdkInferenceOptions } from "./inference-options.js";
 import {
   ClaudeSdkSessionStore,
   createSdkSessionFingerprint,
   prepareSdkPrompt,
 } from "./session.js";
+import { claudeSdkTimeoutEnvironment } from "./timeout.js";
 import {
   type ClaudeSdkToolCall,
   type ClaudeSdkToolResult,
@@ -167,7 +169,23 @@ export async function runClaudeSdkAgent(
   let inputJson = new Map<number, string>();
   let lastResponseText = "";
   let startedMessage = false;
-  let sawStream = false;
+  // SDK assistant frames can duplicate the streamed message or arrive alone.
+  // Identity, not a turn-wide streaming flag, determines whether to account it.
+  const streamedMessageIds = new Set<string>();
+  const assistantFrameIds = new Set<string>();
+  const fallbackUsage = new Map<
+    string,
+    {
+      model: string;
+      inputTokens: number;
+      cacheCreationInputTokens: number;
+      cacheReadInputTokens: number;
+    }
+  >();
+  let streamedOutputTokens = 0;
+  let streamedCallCount = 0;
+  let lastCallInputTokens = 0;
+  let streamingMessageId: string | undefined;
   let pendingStopReason: string | null = null;
   let pendingUsage = {
     inputTokens: 0,
@@ -176,6 +194,48 @@ export async function runClaudeSdkAgent(
     cacheReadInputTokens: 0,
   };
   let messageStartedAt = 0;
+  const flushFallbackUsage = async (
+    outputTokens?: number,
+    durationMs = 0,
+  ): Promise<void> => {
+    if (fallbackUsage.size === 0) {
+      return;
+    }
+    const records = [...fallbackUsage.values()];
+    const models = new Set(records.map((record) => record.model));
+    // Assistant-only frames contain per-step input/cache usage but placeholder
+    // output counts. The result supplies the turn total; do not invent per-step
+    // or mixed-model output attribution. Streaming calls were counted already.
+    await emit({
+      type: "usage",
+      llmCallCount: records.length,
+      lastCallInputTokens,
+      inputTokens: records.reduce(
+        (sum, record) =>
+          sum +
+          record.inputTokens +
+          record.cacheCreationInputTokens +
+          record.cacheReadInputTokens,
+        0,
+      ),
+      outputTokens:
+        outputTokens === undefined
+          ? 0
+          : Math.max(0, outputTokens - streamedOutputTokens),
+      cacheCreationInputTokens: records.reduce(
+        (sum, record) => sum + record.cacheCreationInputTokens,
+        0,
+      ),
+      cacheReadInputTokens: records.reduce(
+        (sum, record) => sum + record.cacheReadInputTokens,
+        0,
+      ),
+      model: models.size === 1 ? records[0]!.model : "unknown",
+      actualProvider: "claude-agent-sdk",
+      providerDurationMs: streamedCallCount === 0 ? durationMs : 0,
+    });
+    fallbackUsage.clear();
+  };
   let closed = false;
   const completedCalls = new Set<string>();
   const executionResults = new Map<string, Promise<ClaudeSdkToolResult>>();
@@ -620,35 +680,29 @@ export async function runClaudeSdkAgent(
     );
     const sdk =
       options.query ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
-    const effort =
-      options.effort === "max"
-        ? "max"
-        : options.effort === "xhigh"
-          ? "xhigh"
-          : options.effort === "low"
-            ? "low"
-            : options.effort === "medium"
-              ? "medium"
-              : "high";
     query = sdk({
       prompt: input,
       options: {
         pathToClaudeCodeExecutable: auth.executablePath,
         cwd,
-        env: auth.env,
+        env: {
+          ...auth.env,
+          ...claudeSdkTimeoutEnvironment(
+            getConfig().timeouts.providerStreamTimeoutSec * 1000,
+          ),
+        },
         abortController: controller,
         model: options.model,
-        effort,
+        ...resolveClaudeSdkInferenceOptions({
+          effort: options.effort,
+          thinking: options.thinking,
+        }),
         systemPrompt: {
           type: "custom",
           prompt: options.systemPrompt,
           snapshot: false,
         },
         tools: [],
-        thinking:
-          options.thinking?.enabled === false || options.effort === "none"
-            ? { type: "disabled" }
-            : { type: "adaptive" },
         toolAliases: Object.fromEntries(
           toolSet.flatMap((tool) => {
             const name = bridge.toSdkName(tool.name);
@@ -754,10 +808,10 @@ export async function runClaudeSdkAgent(
         );
       }
       if (event.type === "stream_event" && !event.parent_tool_use_id) {
-        sawStream = true;
         const frame = event.event;
         if (frame.type === "message_start") {
           await finalizeMessage(null);
+          streamingMessageId = frame.message.id;
           model = frame.message.model;
           pendingStopReason = null;
           messageStartedAt = Date.now();
@@ -850,6 +904,10 @@ export async function runClaudeSdkAgent(
               frame.usage.cache_read_input_tokens;
           }
         } else if (frame.type === "message_stop") {
+          lastCallInputTokens =
+            pendingUsage.inputTokens +
+            pendingUsage.cacheCreationInputTokens +
+            pendingUsage.cacheReadInputTokens;
           await emit({
             type: "usage",
             ...pendingUsage,
@@ -861,12 +919,34 @@ export async function runClaudeSdkAgent(
             actualProvider: "claude-agent-sdk",
             providerDurationMs: Date.now() - messageStartedAt,
           });
+          streamedOutputTokens += pendingUsage.outputTokens;
+          streamedCallCount += 1;
+          if (streamingMessageId) {
+            streamedMessageIds.add(streamingMessageId);
+          }
           await finalizeMessage(pendingStopReason);
+          streamingMessageId = undefined;
         }
       } else if (event.type === "assistant" && !event.parent_tool_use_id) {
         // Partial assistant frames share a message ID and non-final usage.
         // The streaming message_stop is the authoritative completion boundary.
-        if (!sawStream) {
+        if (
+          !streamedMessageIds.has(event.message.id) &&
+          streamingMessageId !== event.message.id &&
+          !assistantFrameIds.has(event.uuid)
+        ) {
+          assistantFrameIds.add(event.uuid);
+          streamed = false;
+          model = event.message.model;
+          messageStartedAt = Date.now();
+          pendingUsage = {
+            inputTokens: event.message.usage.input_tokens,
+            outputTokens: event.message.usage.output_tokens,
+            cacheCreationInputTokens:
+              event.message.usage.cache_creation_input_tokens ?? 0,
+            cacheReadInputTokens:
+              event.message.usage.cache_read_input_tokens ?? 0,
+          };
           startedMessage = true;
           pendingContent = event.message.content.flatMap(
             (block): ContentBlock[] => {
@@ -899,10 +979,23 @@ export async function runClaudeSdkAgent(
               return [];
             },
           );
-          await emit({ type: "llm_call_started", callSite: run.callSite });
+          if (!fallbackUsage.has(event.message.id)) {
+            await emit({ type: "llm_call_started", callSite: run.callSite });
+          }
+          lastCallInputTokens =
+            pendingUsage.inputTokens +
+            pendingUsage.cacheCreationInputTokens +
+            pendingUsage.cacheReadInputTokens;
+          fallbackUsage.set(event.message.id, { model, ...pendingUsage });
           await finalizeMessage(event.message.stop_reason);
         }
       } else if (event.type === "result") {
+        await flushFallbackUsage(
+          event.usage.output_tokens,
+          event.duration_api_ms,
+        );
+        streamedOutputTokens = 0;
+        streamedCallCount = 0;
         await finalizeMessage(event.stop_reason);
         if (controller.signal.aborted || reason !== "no_tool_calls") {
           input.end();
@@ -1019,6 +1112,7 @@ export async function runClaudeSdkAgent(
       await emit({ type: "error", error });
     }
   } finally {
+    await flushFallbackUsage();
     input.end();
     if (deferredCompletion) {
       await emit({
