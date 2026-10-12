@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -17,6 +17,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { assertNotLiveDb } from "../../__tests__/assert-not-live-db.js";
 import { getConfig } from "../../config/loader.js";
+import { getToolResultFilePath } from "../../context/post-turn-tool-result-truncation.js";
 import {
   registerPluginHooks,
   unregisterPluginHooks,
@@ -502,6 +503,87 @@ describe("Claude SDK root runtime regressions", () => {
         .flatMap((message) => message.content)
         .filter((block) => block.type === "tool_result"),
     ).toHaveLength(1);
+  });
+
+  test("successful oversized-result spooling passes the saved stub through hooks and history", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "sdk-runtime-spool-success-"),
+    );
+    cleanups.push(async () => {
+      assertNotLiveDb(directory);
+      await rm(directory, { recursive: true, force: true });
+    });
+    const content = "Completed large result. ".repeat(1500);
+    let hookContent: unknown;
+    registerHooks({
+      "post-tool-use": async (context: PostToolUseContext) => {
+        hookContent = context.toolResponse.content;
+      },
+    });
+    const f = transport(async function* ({ options }) {
+      yield* toolFrames("spool-success");
+      const client = await connect(options.mcpServers?.vellum);
+      await authorize(options, "spool-success");
+      const delivered = await invoke(client, "spool-success");
+      expect(delivered.isError).toBe(false);
+      expect(delivered.content).toEqual([{ type: "text", text: hookContent }]);
+      yield* textBlocks("after-spool", ["Finished"]);
+      yield result();
+    });
+    f.options.conversationDir = directory;
+    f.execute.mockImplementation(async () => ({ content, isError: false }));
+    const output = await runClaudeSdkAgent(f.options);
+    expect(output.error).toBeUndefined();
+    expect(typeof hookContent).toBe("string");
+    expect((hookContent as string).length).toBeLessThan(content.length);
+    expect(hookContent).toContain(".tool-results");
+    expect(
+      await readFile(getToolResultFilePath(directory, "spool-success"), "utf8"),
+    ).toBe(content);
+    expect(JSON.stringify(output.newMessages)).not.toContain(content);
+    expect(f.events.filter((event) => event.type === "tool_result")).toEqual([
+      expect.objectContaining({ content: hookContent, isError: false }),
+    ]);
+    expect(f.execute).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed oversized-result spool preserves the completed result without repeating the tool", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sdk-runtime-spool-"));
+    cleanups.push(async () => {
+      assertNotLiveDb(directory);
+      await rm(directory, { recursive: true, force: true });
+    });
+    // A file where the spool directory belongs deterministically rejects mkdir.
+    await writeFile(join(directory, ".tool-results"), "not a directory");
+    const content = "Completed side effect. ".repeat(1500);
+    const f = transport(async function* ({ options }) {
+      yield* toolFrames("spool-failure");
+      const client = await connect(options.mcpServers?.vellum);
+      await authorize(options, "spool-failure");
+      const first = await invoke(client, "spool-failure");
+      const repeated = await invoke(client, "spool-failure");
+      expect(first.isError).toBe(false);
+      expect(first.content).toEqual([{ type: "text", text: content }]);
+      expect(repeated).toEqual(first);
+      yield* textBlocks("after-tool", ["Finished"]);
+      yield result();
+    });
+    f.options.conversationDir = directory;
+    f.execute.mockImplementation(async () => ({ content, isError: false }));
+    const output = await runClaudeSdkAgent(f.options);
+    expect(output.error).toBeUndefined();
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect(f.events.filter((event) => event.type === "tool_result")).toEqual([
+      expect.objectContaining({
+        toolUseId: "spool-failure",
+        content,
+        isError: false,
+      }),
+    ]);
+    expect(JSON.stringify(output.newMessages)).not.toContain(
+      "may have taken effect",
+    );
+    expect(JSON.stringify(output.newMessages)).toContain(content);
   });
 
   test("a late executor result cannot rewrite an aborted turn or repeat its side effect", async () => {

@@ -35,11 +35,16 @@ mock.module("../../../config/loader.js", () => ({
 mock.module("../../../util/platform.js", () => ({
   getSandboxWorkingDir: () => "/test/workspace",
 }));
+mock.module("../../../config/env.js", () => ({
+  isHttpAuthDisabled: () => false,
+}));
 beforeEach(() => {
   discovery.mockClear();
 });
 
 import { PROVIDER_CATALOG } from "../../../providers/model-catalog.js";
+import { enforcePolicy } from "../../auth/route-policy.js";
+import type { AuthContext } from "../../auth/types.js";
 import { BadRequestError } from "../errors.js";
 import { ROUTES } from "../inference-models-routes.js";
 import type { RouteDefinition, RouteHandlerArgs } from "../types.js";
@@ -87,6 +92,44 @@ describe("GET inference/models", () => {
 });
 
 describe("POST inference/models/discover", () => {
+  test("requires settings.write while offline catalog reads require settings.read", () => {
+    expect(
+      ROUTES.find((route) => route.operationId === "inference_models_discover")
+        ?.policy?.requiredScopes,
+    ).toEqual(["settings.write"]);
+    expect(
+      ROUTES.find((route) => route.operationId === "inference_models_list")
+        ?.policy?.requiredScopes,
+    ).toEqual(["settings.read"]);
+  });
+
+  test("denies read-only callers and admits settings writers", () => {
+    const route = ROUTES.find(
+      (route) => route.operationId === "inference_models_discover",
+    )!;
+    for (const principalType of ["actor", "svc_gateway"] as const) {
+      const reader: AuthContext = {
+        subject: "actor:self:test-principal",
+        principalType,
+        assistantId: "self",
+        actorPrincipalId: "test-principal",
+        scopeProfile: "actor_client_v1",
+        scopes: new Set(["settings.read"]),
+        policyEpoch: 0,
+      };
+      expect(enforcePolicy(route.endpoint, route.policy, reader)?.status).toBe(
+        403,
+      );
+      expect(
+        enforcePolicy(route.endpoint, route.policy, {
+          ...reader,
+          scopes: new Set(["settings.write"]),
+        }),
+      ).toBeNull();
+    }
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
   test("forwards runtime configuration and explicit refresh and returns SDK metadata", async () => {
     const result = await handler("inference_models_discover")({
       body: { provider: "claude-agent-sdk", refresh: true },

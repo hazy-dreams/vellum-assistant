@@ -116,7 +116,7 @@ export const ROUTES: RouteDefinition[] = [
     endpoint: "inference/models/discover",
     method: "POST",
     policy: {
-      requiredScopes: ["settings.read"],
+      requiredScopes: ["settings.write"],
       allowedPrincipalTypes: ACTOR_PRINCIPALS,
     },
     summary: "Discover Claude subscription models",

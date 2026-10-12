@@ -186,24 +186,88 @@ describe("Claude SDK model discovery", () => {
     expect(f.query).toHaveBeenCalledTimes(3);
   });
 
-  test("coalesces concurrent metadata requests including explicit refreshes", async () => {
+  test("coalesces preflight and metadata requests including explicit refreshes", async () => {
+    const auth = deferred<ClaudeSdkAuthResult>();
     const answer = deferred<ModelInfo[]>();
     const started = deferred<void>();
     const f = fixture();
+    f.preflight.mockImplementation(() => auth.promise);
     f.supportedModels.mockImplementation(() => {
       started.resolve();
       return answer.promise;
     });
     const first = f.discover(request);
-    await started.promise;
     const second = f.discover({ ...request, refresh: true });
     await Bun.sleep(0);
+    expect(f.preflight).toHaveBeenCalledTimes(1);
+    expect(f.query).not.toHaveBeenCalled();
+    auth.resolve(authenticated);
+    await started.promise;
+    const third = f.discover({ ...request, refresh: true });
     expect(f.query).toHaveBeenCalledTimes(1);
     answer.resolve([model]);
-    const [a, b] = await Promise.all([first, second]);
+    const [a, b, c] = await Promise.all([first, second, third]);
     expect(a).toEqual(b);
     expect(a).not.toBe(b);
+    expect(a).toEqual(c);
+    expect(a).not.toBe(c);
+    expect(f.preflight).toHaveBeenCalledTimes(1);
     expect(f.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("a refresh joining cached-request preflight bypasses cached metadata", async () => {
+    const f = fixture();
+    await f.discover(request);
+    const auth = deferred<ClaudeSdkAuthResult>();
+    f.preflight.mockImplementationOnce(() => auth.promise);
+    f.supportedModels.mockResolvedValueOnce([
+      { ...model, displayName: "Refreshed model" },
+    ]);
+    const ordinary = f.discover(request);
+    await Bun.sleep(0);
+    const refresh = f.discover({ ...request, refresh: true });
+    auth.resolve(authenticated);
+    const [a, b] = await Promise.all([ordinary, refresh]);
+    expect(a.ok && a.models[0]!.displayName).toBe("Refreshed model");
+    expect(a).toEqual(b);
+    expect(f.preflight).toHaveBeenCalledTimes(2);
+    expect(f.query).toHaveBeenCalledTimes(2);
+  });
+
+  test("refresh bypasses cache throughout an overlapping cached request's completion", async () => {
+    for (let delay = 0; delay <= 8; delay += 1) {
+      const f = fixture();
+      await f.discover(request);
+      const ordinary = f.discover(request);
+      for (let tick = 0; tick < delay; tick += 1) {
+        await Promise.resolve();
+      }
+      const refresh = f.discover({ ...request, refresh: true });
+      expect((await refresh).ok).toBe(true);
+      await ordinary;
+      expect(f.query).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test("coalescing separates executable, cwd and raw environment before preflight", async () => {
+    const auth = deferred<ClaudeSdkAuthResult>();
+    const f = fixture();
+    f.preflight.mockImplementation(() => auth.promise);
+    const env = { HOME: "/home/example", PATH: "/usr/bin" };
+    const results = [
+      f.discover({ ...request, env }),
+      f.discover({ ...request, env: { PATH: env.PATH, HOME: env.HOME } }),
+      f.discover({ ...request, env, executablePath: "/other/claude" }),
+      f.discover({ ...request, env, cwd: "/other/workspace" }),
+      f.discover({ ...request, env: { ...env, CLAUDE_CONFIG_DIR: "/config" } }),
+    ];
+    await Bun.sleep(0);
+    expect(f.preflight).toHaveBeenCalledTimes(4);
+    expect(f.query).not.toHaveBeenCalled();
+    auth.resolve(authenticated);
+    expect((await Promise.all(results)).every((result) => result.ok)).toBe(
+      true,
+    );
   });
 
   test("separates metadata by validated executable, working directory and environment", async () => {
@@ -255,7 +319,12 @@ describe("Claude SDK model discovery", () => {
       reason: "subscription_required",
       message: "Subscription required",
     });
-    expect(await f.discover(request)).toMatchObject({ ok: false });
+    expect(
+      await f.discover({
+        ...request,
+        env: { CLAUDE_CONFIG_DIR: "/other/config" },
+      }),
+    ).toMatchObject({ ok: false });
     const recovered = await f.discover(request);
     expect(recovered.ok && recovered.models[0]!.displayName).toBe(
       model.displayName,
@@ -267,7 +336,7 @@ describe("Claude SDK model discovery", () => {
     expect(f.query).toHaveBeenCalledTimes(2);
   });
 
-  test("passes raw environment only to the shared preflight guard", async () => {
+  test("snapshots raw environment and passes it only to the shared preflight guard", async () => {
     const calls: Parameters<NonNullable<Dependencies["preflight"]>>[0][] = [];
     const f = fixture({
       preflight: async (options) => {
@@ -276,8 +345,13 @@ describe("Claude SDK model discovery", () => {
       },
     });
     const env = { PATH: "/local/bin", VELLUM_UNRELATED_SETTING: "example" };
-    await f.discover({ ...request, env });
-    expect(calls[0]?.env).toBe(env);
+    const result = f.discover({ ...request, env });
+    env.PATH = "/changed/bin";
+    await result;
+    expect(calls[0]?.env).toEqual({
+      PATH: "/local/bin",
+      VELLUM_UNRELATED_SETTING: "example",
+    });
     expect(calls[0]?.executablePath).toBe(request.executablePath);
     expect(calls[0]?.cwd).toBe(request.cwd);
     expect(calls[0]?.signal).toBeDefined();
@@ -350,14 +424,20 @@ describe("Claude SDK model discovery", () => {
         return auth.promise;
       },
     });
-    expect(await f.discover(request)).toMatchObject({
+    const first = f.discover(request);
+    const second = f.discover({ ...request, refresh: true });
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toMatchObject({
       ok: false,
       reason: "discovery_timeout",
     });
+    expect(b).toEqual(a);
     expect(signal?.aborted).toBe(true);
     auth.resolve(authenticated);
     await Bun.sleep(0);
     expect(f.query).not.toHaveBeenCalled();
+    expect((await f.discover(request)).ok).toBe(true);
+    expect(f.query).toHaveBeenCalledTimes(1);
   });
 
   test("late metadata after timeout is not cached and retry creates a fresh query", async () => {

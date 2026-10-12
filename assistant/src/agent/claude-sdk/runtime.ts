@@ -26,6 +26,7 @@ import {
   applySubstitutions,
 } from "../../tools/sensitive-output-placeholders.js";
 import { ProviderError } from "../../util/errors.js";
+import { getLogger } from "../../util/logger.js";
 import { getSandboxWorkingDir } from "../../util/platform.js";
 import { joinDeliveredMessages } from "../../util/text-spacing.js";
 import type {
@@ -51,6 +52,7 @@ import {
   createClaudeSdkToolBridge,
 } from "./tools.js";
 
+const log = getLogger("claude-sdk-runtime");
 const objectSchema = z.record(z.string(), z.unknown());
 
 export interface ClaudeSdkRunOptions {
@@ -318,7 +320,7 @@ export async function runClaudeSdkAgent(
     for (const binding of result.sensitiveBindings ?? []) {
       substitutions.set(binding.placeholder, binding.value);
     }
-    const block: ContentBlock = {
+    let block: ContentBlock = {
       type: "tool_result",
       tool_use_id: call.id,
       content: result.content,
@@ -326,11 +328,20 @@ export async function runClaudeSdkAgent(
       ...(result.contentBlocks ? { contentBlocks: result.contentBlocks } : {}),
     };
     if (conversationDir) {
-      spoolAndStubOversizedToolResults([block], {
-        conversationDir,
-        toolCallById: (id) =>
-          id === call.id ? { name: call.name, input: call.input } : undefined,
-      });
+      try {
+        const blocks = [block];
+        spoolAndStubOversizedToolResults(blocks, {
+          conversationDir,
+          toolCallById: (id) =>
+            id === call.id ? { name: call.name, input: call.input } : undefined,
+        });
+        block = blocks[0] ?? block;
+      } catch (err) {
+        log.warn(
+          { err, conversationId, toolUseId: call.id },
+          "Spooling oversized tool results to disk failed (non-fatal)",
+        );
+      }
     }
     const post = await runHook(HOOKS.POST_TOOL_USE, {
       conversationId,

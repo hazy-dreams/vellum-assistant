@@ -84,6 +84,24 @@ const failedResult = {
     "Claude models could not be discovered. Check the installed Claude Code and try again.",
 } as const;
 
+function discoveryKey(
+  executablePath: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  epoch: number,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        epoch,
+        executablePath,
+        cwd,
+        Object.entries(env).sort(([a], [b]) => a.localeCompare(b)),
+      ]),
+    )
+    .digest("hex");
+}
+
 /** A separate instance keeps mocked transports and their caches test-local. */
 export function createClaudeSdkModelDiscovery(
   dependencies: DiscoveryDependencies = {},
@@ -91,7 +109,13 @@ export function createClaudeSdkModelDiscovery(
   const now = dependencies.now ?? Date.now;
   const timeoutMs = dependencies.timeoutMs ?? DISCOVERY_TIMEOUT_MS;
   const cacheTtlMs = dependencies.cacheTtlMs ?? MODEL_CACHE_TTL_MS;
-  const inFlight = new Map<string, Promise<ClaudeSdkModelDiscoveryResult>>();
+  const inFlight = new Map<
+    string,
+    {
+      options: DiscoveryOptions;
+      promise: Promise<ClaudeSdkModelDiscoveryResult>;
+    }
+  >();
   let authEpoch = 0;
   let cache:
     | {
@@ -207,61 +231,77 @@ export function createClaudeSdkModelDiscovery(
     }
   }
 
-  return async (options) => {
-    const startedAt = performance.now();
-    // Cached metadata must still pass the runtime's subscription and
-    // provider-environment guard.
-    const auth = await bounded(
-      (controller) =>
-        (dependencies.preflight ?? preflightClaudeSdkAuth)({
-          executablePath: options.executablePath,
-          cwd: options.cwd,
-          env: options.env,
-          signal: controller.signal,
-        }),
-      timeoutMs,
-    );
-    if (!auth.ok) {
-      cache = undefined;
-      authEpoch += 1;
-      return auth;
-    }
-    const epoch = authEpoch;
-    const key = createHash("sha256")
-      .update(
-        JSON.stringify([
-          epoch,
-          auth.executablePath,
-          options.cwd,
-          Object.entries(auth.env).sort(([a], [b]) => a.localeCompare(b)),
-        ]),
-      )
-      .digest("hex");
-    if (options.refresh && cache?.key === key) {
-      cache = undefined;
-    }
-    const remainingMs = timeoutMs - (performance.now() - startedAt);
-    if (remainingMs <= 0) {
-      return timeoutResult;
-    }
-    const pending = inFlight.get(key);
-    if (pending) {
-      return structuredClone(await bounded(() => pending, remainingMs));
-    }
-    if (cache?.key === key && cache.expiresAt > now()) {
-      return structuredClone(cache.result);
-    }
-    const discovery = loadModels(auth, options.cwd, remainingMs);
-    inFlight.set(key, discovery);
+  async function discover(
+    options: DiscoveryOptions,
+    epoch: number,
+    requestKey: string,
+  ): Promise<ClaudeSdkModelDiscoveryResult> {
     try {
-      const result = await discovery;
+      const startedAt = performance.now();
+      // Cached metadata must still pass the runtime's subscription and
+      // provider-environment guard.
+      const auth = await bounded(
+        (controller) =>
+          (dependencies.preflight ?? preflightClaudeSdkAuth)({
+            executablePath: options.executablePath,
+            cwd: options.cwd,
+            env: options.env,
+            signal: controller.signal,
+          }),
+        timeoutMs,
+      );
+      if (!auth.ok) {
+        cache = undefined;
+        authEpoch += 1;
+        return auth;
+      }
+      const key = discoveryKey(
+        auth.executablePath,
+        options.cwd,
+        auth.env,
+        epoch,
+      );
+      if (options.refresh && cache?.key === key) {
+        cache = undefined;
+      }
+      const remainingMs = timeoutMs - (performance.now() - startedAt);
+      if (remainingMs <= 0) {
+        return timeoutResult;
+      }
+      if (cache?.key === key && cache.expiresAt > now()) {
+        return cache.result;
+      }
+      const result = await loadModels(auth, options.cwd, remainingMs);
       if (result.ok && epoch === authEpoch) {
         cache = { key, expiresAt: now() + cacheTtlMs, result };
       }
-      return structuredClone(result);
+      return result;
     } finally {
-      inFlight.delete(key);
+      inFlight.delete(requestKey);
     }
+  }
+
+  return async (options) => {
+    const request = { ...options, env: { ...(options.env ?? process.env) } };
+    const epoch = authEpoch;
+    const key = discoveryKey(
+      request.executablePath,
+      request.cwd,
+      request.env,
+      epoch,
+    );
+    let pending = inFlight.get(key);
+    if (pending) {
+      pending.options.refresh ||= request.refresh;
+    } else {
+      // Install the flight before preflight can launch any subprocesses.
+      const promise = Promise.resolve().then(() =>
+        discover(request, epoch, key),
+      );
+      pending = { options: request, promise };
+      inFlight.set(key, pending);
+    }
+    return structuredClone(await pending.promise);
   };
 }
 

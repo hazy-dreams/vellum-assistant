@@ -106,6 +106,11 @@ output attribution. A failed query without a result retains known input/cache
 usage with unknown output counted as zero. Session-cumulative cost/model totals
 are not added to per-turn usage. See [SDK cost tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking).
 
+Successful spooling passes the saved, shortened result through post-tool hooks
+and conversation history. If saving an oversized tool result fails, the SDK bridge logs the failure and
+continues with the completed in-memory result, matching the native loop. It does
+not rerun the tool to recover a spool file.
+
 ## History, resume and interruption
 
 Vellum persists only a session mapping, message hashes and an in-flight marker
@@ -159,11 +164,13 @@ labels are authoritative, and a saved model ID remains visible even when it is
 absent from the latest list. Aliases and versioned IDs pass through unchanged.
 The default profile intents still use `sonnet`, `opus`, and `haiku` aliases.
 
-`POST /v1/inference/models/discover` initializes a no-prompt SDK session and reads
+`POST /v1/inference/models/discover` requires `settings.write`, initializes a
+no-prompt SDK session and reads
 `supportedModels()`. It does not submit a generation request. Initialization can
 still perform Claude Code startup, authentication, and network activity. Results
 are briefly cached; Refresh bypasses cached metadata, while concurrent requests
-share initialization. A failed refresh is
+share the complete operation, including authentication preflight. Cached metadata
+still requires a successful authentication check. A failed refresh is
 shown explicitly and does not silently substitute the static catalog. The
 ordinary `GET /v1/inference/models` endpoint remains the offline catalog for
 existing clients and providers.
