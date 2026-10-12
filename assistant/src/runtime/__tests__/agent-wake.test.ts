@@ -311,6 +311,7 @@ const recordUsageCalls: Array<{
   actor: string;
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
+  llmCallCount: number | undefined;
   callSite: unknown;
   overrideProfile: unknown;
   forceOverrideProfile: unknown;
@@ -328,7 +329,7 @@ mock.module("../../daemon/conversation-usage.js", () => ({
     cacheCreationInputTokens = 0,
     cacheReadInputTokens = 0,
     _rawResponse?: unknown,
-    _llmCallCount?: number,
+    llmCallCount?: number,
     _contextWindow?: unknown,
     attribution?: {
       callSite?: unknown;
@@ -346,6 +347,7 @@ mock.module("../../daemon/conversation-usage.js", () => ({
       actor,
       cacheCreationInputTokens,
       cacheReadInputTokens,
+      llmCallCount,
       callSite: attribution?.callSite ?? null,
       overrideProfile: attribution?.overrideProfile ?? null,
       forceOverrideProfile: attribution?.forceOverrideProfile,
@@ -3254,8 +3256,54 @@ describe("wakeAgentForOpportunity", () => {
       cacheCreationInputTokens: 7,
       cacheReadInputTokens: 11,
       callSite: "memoryRetrospective",
+      llmCallCount: 1,
       // Seed the dispatch path used for mix-arm resolution.
       selectionSeed: conversation.conversationId,
+    });
+  });
+
+  test("wake records an aggregate SDK usage event with its represented LLM call count", async () => {
+    const usageEvent: AgentEvent = {
+      type: "usage",
+      inputTokens: 100,
+      outputTokens: 20,
+      model: "sonnet",
+      actualProvider: "claude-agent-sdk",
+      providerDurationMs: 10,
+      cacheCreationInputTokens: 7,
+      cacheReadInputTokens: 11,
+      llmCallCount: 2,
+    };
+    const conversation = makeWakeConversation({
+      baseline: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      scriptedEvents: [usageEvent],
+      scriptedAssistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "SDK reply" }],
+      },
+    });
+
+    await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        hint: "do reply",
+        source: "unit-test",
+        callSite: "memoryRetrospective",
+      },
+      { resolveTarget: async () => conversation },
+    );
+
+    expect(recordUsageCalls).toHaveLength(1);
+    expect(recordUsageCalls[0]).toMatchObject({
+      conversationId: conversation.conversationId,
+      providerName: "claude-agent-sdk",
+      model: "sonnet",
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheCreationInputTokens: 7,
+      cacheReadInputTokens: 11,
+      llmCallCount: 2,
+      callSite: "memoryRetrospective",
     });
   });
 

@@ -15,6 +15,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 
+import { ApiError } from "@/utils/api-errors";
+
 import type {
   DefaultProviderStatus,
   ProviderConnection,
@@ -35,6 +37,7 @@ let putBodies: Array<{ provider: string; connectionName?: string }> = [];
 let deleteCalls: string[] = [];
 let deleteStatus = 200;
 let toastErrors: string[] = [];
+let putError: Error | null = null;
 
 mock.module("@vellumai/design-library/components/toast", () => ({
   toast: {
@@ -67,6 +70,9 @@ mock.module("@/generated/daemon/sdk.gen", () => ({
   }) => {
     if (options?.body) {
       putBodies.push(options.body);
+    }
+    if (putError) {
+      throw putError;
     }
     return { data: defaultProviderState, response: { ok: true } };
   },
@@ -202,6 +208,7 @@ beforeEach(() => {
   deleteCalls = [];
   deleteStatus = 200;
   toastErrors = [];
+  putError = null;
   useAssistantIdentityStore.getState().setIdentity("test-asst", "0.11.0");
 });
 
@@ -337,4 +344,55 @@ describe("ProvidersSection - kebab actions", () => {
     expect(toastErrors[0]).toContain("in use by a profile");
     expect(toastErrors[0]).not.toContain("local-ollama");
   });
+});
+
+
+test("Claude subscription uses the existing default-provider action and local badge", async () => {
+  connectionsState.push(
+    connection({
+      name: "claude-agent-sdk-personal",
+      provider: "claude-agent-sdk",
+      auth: { type: "none" },
+    }),
+  );
+  renderSection();
+  await waitFor(() => expect(rows()).toHaveLength(4));
+  const row = rows().find((entry) =>
+    entry.textContent?.includes("Claude subscription"),
+  );
+  expect(row?.textContent).toContain("Local");
+  const menu = await openKebab("Claude subscription");
+  clickMenuItem(menu, "Set as default");
+  await waitFor(() =>
+    expect(putBodies).toEqual([
+      {
+        provider: "claude-agent-sdk",
+        connectionName: "claude-agent-sdk-personal",
+      },
+    ]),
+  );
+});
+
+test("default-provider setup failures preserve actionable sign-in errors", async () => {
+  connectionsState.push(
+    connection({
+      name: "claude-agent-sdk-personal",
+      provider: "claude-agent-sdk",
+      auth: { type: "none" },
+    }),
+  );
+  putError = new ApiError(
+    400,
+    "Sign in to Claude Code on the assistant's computer.",
+  );
+  renderSection();
+  await waitFor(() => expect(rows()).toHaveLength(4));
+  const menu = await openKebab("Claude subscription");
+  clickMenuItem(menu, "Set as default");
+  await waitFor(() =>
+    expect(toastErrors).toEqual([
+      "Sign in to Claude Code on the assistant's computer.",
+    ]),
+  );
+  expect(putBodies).toHaveLength(1);
 });

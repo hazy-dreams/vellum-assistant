@@ -196,6 +196,47 @@ export interface ProviderCatalogEntry {
  */
 const RAW_PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
+    id: "claude-agent-sdk",
+    displayName: "Claude subscription",
+    subtitle:
+      "Claude Agent SDK using your local Claude Code subscription sign-in.",
+    setupMode: "keyless",
+    setupHint:
+      "Install Claude Code and run claude auth login on this computer with your Claude subscription.",
+    credentialsGuide: {
+      description:
+        "Claude Code manages subscription authentication. API keys and custom endpoints are not supported on this route.",
+      url: "https://code.claude.com/docs/en/authentication",
+      linkLabel: "Claude Code authentication",
+    },
+    defaultModel: "sonnet",
+    models: [
+      {
+        id: "opus",
+        displayName: "Claude Opus (subscription)",
+        supportsThinking: true,
+        supportsEffort: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+      {
+        id: "sonnet",
+        displayName: "Claude Sonnet (subscription)",
+        supportsThinking: true,
+        supportsEffort: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+      {
+        id: "haiku",
+        displayName: "Claude Haiku (subscription)",
+        supportsThinking: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+    ],
+  },
+  {
     id: "anthropic",
     displayName: "Anthropic",
     subtitle: "Claude models from Anthropic. Requires an Anthropic API key.",

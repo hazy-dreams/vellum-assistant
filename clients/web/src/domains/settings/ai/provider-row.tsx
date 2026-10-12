@@ -6,6 +6,7 @@ import { ListRow } from "@vellumai/design-library/components/list-row";
 import { Menu } from "@vellumai/design-library/components/menu";
 import { Tag } from "@vellumai/design-library/components/tag";
 
+import { isLocalRuntimeProvider } from "@/domains/settings/ai/provider-availability";
 import { providerConnectionDisplayName } from "@/domains/settings/ai/provider-editor-constants";
 import {
   isDefaultProviderId,
@@ -89,7 +90,7 @@ export function ProviderRow({
               {t("providerRow.defaultTag")}
             </Tag>
           ) : null}
-          {connection.provider === "ollama" ? (
+          {isLocalRuntimeProvider(connection.provider) ? (
             <Tag tone="neutral" title={t("providerRow.localTagTitle")}>
               {t("providerRow.localTag")}
             </Tag>

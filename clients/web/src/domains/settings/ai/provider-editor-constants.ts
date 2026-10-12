@@ -1,5 +1,8 @@
+import { z } from "zod";
+
 import { toast } from "@vellumai/design-library/components/toast";
 
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
 import { PROVIDER_DISPLAY_NAMES } from "@/assistant/llm-model-catalog";
 import type { TFunction } from "@/i18n";
 import type {
@@ -27,6 +30,7 @@ export type AuthType = Auth["type"];
  */
 export const CONNECTION_PROVIDERS: ConnectionProvider[] = [
   "anthropic",
+  CLAUDE_AGENT_SDK_PROVIDER,
   "openai",
   "gemini",
   "ollama",
@@ -50,15 +54,17 @@ export const CONNECTION_PROVIDERS: ConnectionProvider[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Auth a connection to `provider` uses. Ollama serves a local endpoint with no
- * credential; every other catalog provider authenticates by API key. The
+ * Ollama is keyless; Claude Agent SDK uses the installed Claude Code login.
+ * Other catalog connections authenticate by API key. The
  * ChatGPT subscription pseudo-provider (`oauth_subscription`) is a picker-level
  * identity, not a `ConnectionProvider`, and is handled by its own OAuth flow.
  */
 export function connectionAuthTypeForProvider(
   provider: ConnectionProvider,
 ): AuthType {
-  return provider === "ollama" ? "none" : "api_key";
+  return provider === "ollama" || provider === CLAUDE_AGENT_SDK_PROVIDER
+    ? "none"
+    : "api_key";
 }
 
 /**
@@ -124,11 +130,10 @@ export function validationErrorMessage(
   if (status !== 400) {
     return undefined;
   }
-  const inner = (sdkError as { error?: { message?: unknown } } | null)?.error;
-  const message = inner?.message;
-  return typeof message === "string" && message.length > 0
-    ? message
-    : undefined;
+  const parsed = z
+    .object({ error: z.object({ message: z.string().min(1) }) })
+    .safeParse(sdkError);
+  return parsed.success ? parsed.data.error.message : undefined;
 }
 
 /**

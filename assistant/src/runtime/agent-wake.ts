@@ -1213,7 +1213,7 @@ export async function wakeAgentForOpportunity(
             event.cacheCreationInputTokens ?? 0,
             event.cacheReadInputTokens ?? 0,
             event.rawResponse,
-            1,
+            event.llmCallCount ?? 1,
             undefined,
             // Mirror the profile state the request actually ran under:
             // `forceOverrideProfile` floats the override above the call-site

@@ -1,5 +1,7 @@
 import { VELLUM_SERVED_PROVIDERS } from "@/assistant/llm-model-catalog";
 
+export const CLAUDE_AGENT_SDK_PROVIDER = "claude-agent-sdk";
+
 export const OPENAI_COMPATIBLE_PROVIDER = "openai-compatible";
 
 /**
@@ -11,6 +13,7 @@ export const OPENAI_COMPATIBLE_PROVIDER = "openai-compatible";
  */
 export const INFERENCE_PROVIDERS = [
   "anthropic",
+  CLAUDE_AGENT_SDK_PROVIDER,
   "openai",
   "fireworks",
   "together",

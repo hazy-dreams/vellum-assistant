@@ -4,6 +4,12 @@
  */
 
 import {
+  claudeModelEffortLevels,
+  type ClaudeDiscoveredModel,
+} from "@/domains/settings/ai/claude-model-options";
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
+
+import {
   getModelsForProvider,
   type LlmCatalogModel,
 } from "@/assistant/llm-model-catalog";
@@ -221,9 +227,17 @@ function supportsTopP(providerId: string, usesAnthropicWire: boolean): boolean {
 export function resolveProfileParamVisibility(
   provider: string,
   model: string,
+  claudeModel?: ClaudeDiscoveredModel,
 ): ProfileParamVisibility {
   if (!provider || !model) {
     return VISIBILITY_NONE;
+  }
+
+  if (provider === CLAUDE_AGENT_SDK_PROVIDER) {
+    return {
+      ...VISIBILITY_NONE,
+      effort: claudeModelEffortLevels(claudeModel).length > 0,
+    };
   }
 
   // The chatgpt identity dispatches through the OpenAI Responses adapter

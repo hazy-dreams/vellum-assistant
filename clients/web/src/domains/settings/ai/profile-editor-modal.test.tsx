@@ -86,6 +86,30 @@ mock.module("@/domains/settings/ai/use-provider-credentials-list", () => ({
   }),
 }));
 
+mock.module(
+  "./use-claude-models",
+  (): Partial<typeof import("./use-claude-models")> => ({
+    useClaudeModels: (_assistantId, enabled) => ({
+      models: [
+        {
+          provider: "claude-agent-sdk",
+          id: "sonnet",
+          displayName: "Claude Sonnet (subscription)",
+          description: "",
+        },
+      ],
+      status: enabled ? "ready" : "disabled",
+      isRefreshing: false,
+      isStale: false,
+      fetchedAt: undefined,
+      error: null,
+      refresh: async () => {},
+    }),
+    claudeModelsQueryKey: (assistantId) =>
+      ["claude-agent-sdk-models", assistantId] as const,
+  }),
+);
+
 const { ProfileEditorModal } =
   await import("@/domains/settings/ai/profile-editor-modal");
 
@@ -216,6 +240,7 @@ function ollamaOption(): HTMLElement {
  */
 const UNCONNECTED_PROVIDER_LABELS = [
   "Anthropic",
+  "Claude subscription",
   "OpenAI",
   "Google Gemini",
   "Ollama",
@@ -600,12 +625,18 @@ describe("ProfileEditorModal create mode — provider-first", () => {
       optionRows()
         .filter(
           (row) =>
-            row.label !== "+ Create new provider" && row.label !== "Ollama",
+            row.label !== "+ Create new provider" &&
+            row.label !== "Ollama" &&
+            row.label !== "Claude subscription",
         )
         .every((row) => row.meta === ADD_KEY_META),
     ).toBe(true);
     expect(optionRows()).toContainEqual({
       label: "Ollama",
+      meta: SELF_HOSTED_ONLY_META,
+    });
+    expect(optionRows()).toContainEqual({
+      label: "Claude subscription",
       meta: SELF_HOSTED_ONLY_META,
     });
   });
@@ -2468,5 +2499,31 @@ describe("entries wire shape", () => {
     } finally {
       store.getState().clearIdentity();
     }
+  });
+});
+
+test("Claude subscription creates a distinct selector profile with its canonical provider", async () => {
+  useAssistantLifecycleStore.setState({
+    assistantState: { kind: "self_hosted" },
+  });
+  const connection = {
+    ...makeConnection("claude-agent-sdk-personal", "claude-agent-sdk"),
+    auth: { type: "none" as const },
+  };
+  const saveCalls: Array<{ name: string; entry: unknown }> = [];
+  renderCreate([connection], async (name, entry) => {
+    saveCalls.push({ name, entry });
+  });
+  selectProvider("Claude subscription");
+  selectModel("Claude Sonnet (subscription)");
+  fireEvent.click(getSaveBtn());
+  await waitFor(() => expect(saveCalls).toHaveLength(1));
+  expect(saveCalls[0]).toEqual({
+    name: "claude-sonnet-subscription",
+    entry: {
+      label: "Claude Sonnet (subscription)",
+      provider: "claude-agent-sdk",
+      model: "sonnet",
+    },
   });
 });

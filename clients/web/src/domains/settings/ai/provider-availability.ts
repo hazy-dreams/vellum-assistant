@@ -3,6 +3,7 @@ import { useActiveAssistantIsSelfHosted } from "@/hooks/use-platform-gate";
 
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   INFERENCE_PROVIDERS,
   MANAGED_ROUTABLE_PROVIDERS,
   OPENAI_COMPATIBLE_PROVIDER,
@@ -21,7 +22,10 @@ import type {
  * and disable the row instead of dropping it: an absent row reads as "not
  * supported yet" rather than "not applicable to this assistant".
  */
-const LOCAL_ONLY_PROVIDERS = new Set<string>(["ollama"]);
+const LOCAL_ONLY_PROVIDERS = new Set<string>([
+  "ollama",
+  CLAUDE_AGENT_SDK_PROVIDER,
+]);
 
 /** Every provider the model catalog knows, in catalog order. */
 export const CATALOG_PROVIDERS = Object.keys(MODELS_BY_PROVIDER) as Array<
@@ -51,11 +55,15 @@ export function connectionServesProvider(
   );
 }
 
+export function isLocalRuntimeProvider(provider: string): boolean {
+  return LOCAL_ONLY_PROVIDERS.has(provider);
+}
+
 export function isProviderSelectableForAssistant(
   provider: string,
   activeAssistantIsSelfHosted: boolean,
 ): boolean {
-  return !LOCAL_ONLY_PROVIDERS.has(provider) || activeAssistantIsSelfHosted;
+  return !isLocalRuntimeProvider(provider) || activeAssistantIsSelfHosted;
 }
 
 export function selectableInferenceProvidersForAssistant(
@@ -193,6 +201,7 @@ export function parseEntryPickerValue(
 }
 
 const ROUTING_IDENTITY_KINDS = new Set<string>([
+  CLAUDE_AGENT_SDK_PROVIDER,
   VELLUM_CONNECTION_PROVIDER,
   CHATGPT_CONNECTION_PROVIDER,
 ]);

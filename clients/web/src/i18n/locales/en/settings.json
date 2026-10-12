@@ -2576,5 +2576,33 @@
     "checkingDescription": "Checking notification permission…",
     "openTabDescription": "Keep a Vellum tab open to receive alerts. Closing or suspending the tab, or going offline, pauses delivery.",
     "enable": "Enable notifications"
+  },
+  "claudeAgentSdkSettings": {
+    "description": "Uses the Claude Agent SDK with your existing Claude Code sign-in. Install Claude Code and sign in with your Claude subscription on the same computer that runs this assistant. Vellum does not start a login or ask for a token.",
+    "billing": "Uses your Claude subscription limits and ordinary retries. Check your profile and fallback settings; separate services and API overrides may incur charges. The default applies to requests without an override. Existing chat-profile and background-task overrides keep their selected providers. Claude Agent SDK does not provide embeddings. Memory embeddings keep their separately configured backend and may incur API or managed-service charges.",
+    "pathLabel": "Claude Code executable path (optional)",
+    "pathPlaceholder": "Automatic discovery",
+    "pathHint": "Leave blank to find Claude Code automatically. Otherwise enter the absolute path to the installed Claude Code executable on the assistant’s computer. This setting is shared by all Claude subscription profiles.",
+    "pathInvalid": "Enter an absolute executable path, or leave it blank for automatic discovery.",
+    "checkingSupport": "Checking assistant support…",
+    "supportUnavailable": "Could not check assistant support. Reopen settings to try again.",
+    "updateRequired": "Update this assistant to use Claude subscription.",
+    "loadFailed": "Could not load Claude Code settings. Reopen settings to try again.",
+    "saveFailed": "Could not save the Claude Code path. Your provider has not been saved. Try again.",
+    "rowMeta": "Claude subscription · Local Claude Code sign-in",
+    "retry": "Try again"
+  },
+  "claudeModelDiscovery": {
+    "loading": "Loading models from local Claude Code…",
+    "ready": "Models discovered from local Claude Code.",
+    "empty": "Claude Code returned no available models. Check your local sign-in and refresh.",
+    "stale": "Showing previously discovered models. Refresh to check availability.",
+    "loadFailed": "Could not discover Claude models. Check that Claude Code is installed and signed in on the assistant’s computer, then try again.",
+    "supportFailed": "Could not check assistant support for Claude model discovery. Try again.",
+    "updateRequired": "Update this assistant to discover Claude subscription models.",
+    "updatedAt": "Last discovered: {time}",
+    "selectionUnavailable": "Saved model {model} is not in the discovered list. Your selection is preserved.",
+    "refresh": "Refresh Claude models",
+    "retry": "Retry Claude discovery"
   }
 }

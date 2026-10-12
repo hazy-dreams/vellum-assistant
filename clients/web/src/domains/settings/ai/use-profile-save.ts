@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { toast } from "@vellumai/design-library/components/toast";
 
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
 import { useLlmConfigPatch } from "@/domains/settings/ai/use-llm-config-patch";
 import { t } from "@/i18n";
 import { captureError } from "@/lib/sentry/capture-error";
@@ -175,7 +176,9 @@ export function useProfileSave(
       );
     }
     onSaved?.();
-    void probeSavedProfile(assistantId, name);
+    if (entry.provider !== CLAUDE_AGENT_SDK_PROVIDER) {
+      void probeSavedProfile(assistantId, name);
+    }
   }
 
   return { saveProfile, isPending: configMutation.isPending };

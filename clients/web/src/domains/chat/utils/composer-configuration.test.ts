@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   favoriteModes,
   modeLabel,
+  modeHint,
   serializeComposerWrite,
 } from "./composer-configuration";
 const entries = [
@@ -95,4 +96,9 @@ test("writes are ordered, independent between chats, and recover after rejection
   release();
   await Promise.all([caught, second]);
   expect(calls).toEqual(["first", "other", "second"]);
+});
+
+
+test("renamed subscription profiles still disclose subscription use", () => {
+  expect(modeHint({ name: "personal", label: "My writer", provider: "claude-agent-sdk", model: "sonnet" })).toBe("Claude subscription · Uses local Claude Code");
 });

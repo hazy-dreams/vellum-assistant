@@ -41,6 +41,7 @@ const log = getLogger("provider-send-message");
 
 export interface ConfiguredProviderResult {
   provider: Provider;
+  resolvedConfig: ReturnType<typeof resolveCallSiteConfig>;
   configuredProviderName: string;
   /**
    * True when the profile's provider was an entry label and dispatch routed
@@ -261,6 +262,7 @@ export async function resolveConfiguredProvider(
   // reported as the one that signed the request.
   recordProviderRequestDiagnostics({ connection_name: connectionName });
   return {
+    resolvedConfig: resolved,
     provider: new CallSiteConfiguredProvider(
       connectionProvider,
       callSite,

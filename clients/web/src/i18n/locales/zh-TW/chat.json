@@ -2330,6 +2330,7 @@
       }
     },
     "allModelsLink": "所有模型（{count}）",
-    "allModelsList": "所有模型"
+    "allModelsList": "所有模型",
+    "claudeSubscriptionHint": "Claude 訂閱 · 使用本機 Claude Code"
   }
 }

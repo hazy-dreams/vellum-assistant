@@ -69,6 +69,9 @@ export function modeLabel(entry: ProfilePickerEntry): string {
 }
 
 export function modeHint(entry: ProfilePickerEntry): string {
+  if (entry.provider === "claude-agent-sdk") {
+    return t("chat:composerConfiguration.claudeSubscriptionHint");
+  }
   if (isBuiltinMode(entry)) {
     return t(BUILTIN_KEYS[entry.name]);
   }

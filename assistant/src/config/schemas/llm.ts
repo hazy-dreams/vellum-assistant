@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 import { z } from "zod";
 
 import {
@@ -60,6 +62,7 @@ const ALWAYS_RESOLVING_MANAGED_ONLY_PROFILE_KEYS =
  * is where entry names unlock when the entries model enables them.
  */
 export const KNOWN_LLM_PROVIDERS = [
+  "claude-agent-sdk",
   "anthropic",
   "openai",
   "gemini",
@@ -964,6 +967,18 @@ export function collectFallbackProfileIssues(
 
 export const LLMSchema = z
   .object({
+    claudeAgentSdk: z
+      .object({
+        executablePath: z
+          .string()
+          .min(1)
+          .refine(isAbsolute, {
+            message: "Claude Code executable path must be absolute",
+          })
+          .nullable()
+          .optional(),
+      })
+      .optional(),
     profiles: z.record(z.string().min(1), ProfileEntry).default({}),
     // Presentation-only order for named profiles. The resolver ignores this;
     // clients use it to render profile pickers consistently.

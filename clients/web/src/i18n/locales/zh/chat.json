@@ -2330,6 +2330,7 @@
       }
     },
     "allModelsLink": "所有模型（{count}）",
-    "allModelsList": "所有模型"
+    "allModelsList": "所有模型",
+    "claudeSubscriptionHint": "Claude 订阅 · 使用本地 Claude Code"
   }
 }

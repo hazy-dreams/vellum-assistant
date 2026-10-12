@@ -17,6 +17,7 @@ import { PROVIDER_DISPLAY_NAMES } from "@/assistant/llm-model-catalog";
 import { ChatgptOAuthSection } from "@/domains/settings/ai/chatgpt-oauth-section";
 import {
   CHATGPT_CONNECTION_PROVIDER,
+  CLAUDE_AGENT_SDK_PROVIDER,
   VELLUM_CONNECTION_PROVIDER,
 } from "@/domains/settings/ai/constants";
 import {
@@ -35,6 +36,8 @@ import type { ProfileEditor } from "@/domains/settings/ai/use-profile-editor";
 import { useActiveAssistantIsSelfHosted } from "@/hooks/use-platform-gate";
 import { useTranslation, type TFunction } from "@/i18n";
 import { useAssistantFeatureFlagStore } from "@/stores/assistant-feature-flag-store";
+
+import { ClaudeModelDiscoveryStatus } from "./claude-model-discovery-status";
 
 /**
  * Sentinel for the Model list's sticky escape hatch. Namespaced so it can
@@ -59,11 +62,16 @@ type ModelRowState = "current" | "folded" | "disclosed";
  * What the user has answered to the flow's first question. A catalog pick is
  * held by display name because that is the identity a model keeps across the
  * providers that host it; the per-provider id follows from the route chosen
- * next.
+ * next. Claude choices also keep their selected wire ID across discovery
+ * refreshes.
  */
 type ModelDraft =
   | { readonly kind: "none" }
-  | { readonly kind: "catalog"; readonly displayName: string }
+  | {
+      readonly kind: "catalog";
+      readonly displayName: string;
+      readonly claudeModelId?: string;
+    }
   | { readonly kind: "custom"; readonly modelId: string };
 
 const NO_MODEL: ModelDraft = { kind: "none" };
@@ -133,9 +141,14 @@ export function ProfileCreateModelFirst({
     useAssistantFeatureFlagStore.use.vellumHostedInference();
   const defaultEntryMetaLabel = t("aiProviderPicker.defaultEntryMeta");
 
-  const resolverInput = useMemo<ModelFirstInput>(
+  const baseResolverInput = useMemo<ModelFirstInput>(
     () => ({
       connections: editor.effectiveConnections,
+      claudeModels: editor.claudeModels.models,
+      selectedClaudeModel:
+        editor.provider === CLAUDE_AGENT_SDK_PROVIDER && editor.model
+          ? { id: editor.model, displayName: editor.model }
+          : undefined,
       hostedInference,
       activeAssistantIsSelfHosted,
       labelFor: (provider) => PROVIDER_DISPLAY_NAMES[provider] ?? provider,
@@ -143,19 +156,13 @@ export function ProfileCreateModelFirst({
     }),
     [
       editor.effectiveConnections,
+      editor.claudeModels.models,
+      editor.provider,
+      editor.model,
       hostedInference,
       activeAssistantIsSelfHosted,
       defaultEntryMetaLabel,
     ],
-  );
-
-  const groups = useMemo(
-    () => resolveModelFirstGroups(resolverInput),
-    [resolverInput],
-  );
-  const options = useMemo(
-    () => groups.flatMap((group) => group.options),
-    [groups],
   );
 
   // Sections the user has unfolded. The control that unfolds one sits on its
@@ -170,17 +177,58 @@ export function ProfileCreateModelFirst({
     if (editor.model === "") {
       return NO_MODEL;
     }
-    const seeded = options.find((option) =>
-      option.candidates.some(
-        (candidate) =>
-          candidate.provider === editor.provider &&
-          candidate.modelId === editor.model,
-      ),
-    );
+    const seeded = resolveModelFirstGroups(baseResolverInput)
+      .flatMap((group) => group.options)
+      .find((option) =>
+        option.candidates.some(
+          (candidate) =>
+            candidate.provider === editor.provider &&
+            candidate.modelId === editor.model,
+        ),
+      );
     return seeded
-      ? { kind: "catalog", displayName: seeded.displayName }
+      ? {
+          kind: "catalog",
+          displayName: seeded.displayName,
+          claudeModelId:
+            editor.provider === CLAUDE_AGENT_SDK_PROVIDER
+              ? editor.model
+              : undefined,
+        }
       : { kind: "custom", modelId: editor.model };
   });
+  const resolverInput = useMemo<ModelFirstInput>(
+    () => ({
+      ...baseResolverInput,
+      selectedClaudeModel:
+        draft.kind === "catalog" && draft.claudeModelId
+          ? { id: draft.claudeModelId, displayName: draft.displayName }
+          : baseResolverInput.selectedClaudeModel,
+    }),
+    [baseResolverInput, draft],
+  );
+  const groups = useMemo(
+    () => resolveModelFirstGroups(resolverInput),
+    [resolverInput],
+  );
+  const options = useMemo(
+    () => groups.flatMap((group) => group.options),
+    [groups],
+  );
+
+  const catalogDisplayName =
+    draft.kind === "catalog"
+      ? draft.claudeModelId
+        ? (options.find((option) =>
+            option.candidates.some(
+              (candidate) =>
+                candidate.provider === CLAUDE_AGENT_SDK_PROVIDER &&
+                candidate.modelId === draft.claudeModelId,
+            ),
+          )?.displayName ?? draft.displayName)
+        : draft.displayName
+      : "";
+
   const [selectedValue, setSelectedValue] = useState(() => {
     if (editor.provider === "") {
       return "";
@@ -198,7 +246,7 @@ export function ProfileCreateModelFirst({
   const candidates = useMemo<readonly ProviderCandidate[]>(() => {
     if (draft.kind === "catalog") {
       return (
-        options.find((option) => option.displayName === draft.displayName)
+        options.find((option) => option.displayName === catalogDisplayName)
           ?.candidates ?? []
       );
     }
@@ -206,10 +254,17 @@ export function ProfileCreateModelFirst({
       return customModelProviderCandidates(resolverInput, draft.modelId);
     }
     return [];
-  }, [draft, options, resolverInput]);
+  }, [draft, options, resolverInput, catalogDisplayName]);
 
   const selectedCandidate =
-    candidates.find((candidate) => candidate.value === selectedValue) ?? null;
+    candidates.find(
+      (candidate) =>
+        candidate.value === selectedValue &&
+        (draft.kind !== "catalog" ||
+          !draft.claudeModelId ||
+          candidate.provider !== CLAUDE_AGENT_SDK_PROVIDER ||
+          candidate.modelId === draft.claudeModelId),
+    ) ?? null;
 
   // The model is written last, once the route that serves it is settled, so
   // the editor derives the profile's Name from the model's display name under
@@ -230,6 +285,25 @@ export function ProfileCreateModelFirst({
   }, [selectedCandidate, editor]);
 
   function selectCandidate(candidate: ProviderCandidate): void {
+    const selectedDisplayName = options.find((option) =>
+      option.candidates.some(
+        (entry) =>
+          entry.value === candidate.value &&
+          entry.modelId === candidate.modelId,
+      ),
+    )?.displayName;
+    setDraft((previous) =>
+      previous.kind === "catalog"
+        ? {
+            ...previous,
+            displayName: selectedDisplayName ?? previous.displayName,
+            claudeModelId:
+              candidate.provider === CLAUDE_AGENT_SDK_PROVIDER
+                ? candidate.modelId
+                : undefined,
+          }
+        : previous,
+    );
     setSelectedValue(candidate.value);
     if (editor.provider !== candidate.provider) {
       editor.handleProviderChange(candidate.provider);
@@ -442,9 +516,7 @@ export function ProfileCreateModelFirst({
               onChange={(event) =>
                 handleCustomModelIdChange(event.target.value)
               }
-              placeholder={t(
-                "profileCreateModelFirst.customModelPlaceholder",
-              )}
+              placeholder={t("profileCreateModelFirst.customModelPlaceholder")}
               aria-label={t("profileCreateModelFirst.customModelAriaLabel")}
               fullWidth
               autoFocus
@@ -469,7 +541,7 @@ export function ProfileCreateModelFirst({
           </>
         ) : (
           <SearchableSelect
-            value={draft.kind === "catalog" ? draft.displayName : ""}
+            value={catalogDisplayName}
             onChange={handleModelPick}
             aria-label={t("profileCreateModelFirst.modelAriaLabel")}
             placeholder={t("profileCreateModelFirst.modelPlaceholder")}
@@ -482,6 +554,15 @@ export function ProfileCreateModelFirst({
           />
         )}
       </div>
+
+      <ClaudeModelDiscoveryStatus
+        discovery={editor.claudeModels}
+        selectedModel={
+          editor.provider === CLAUDE_AGENT_SDK_PROVIDER
+            ? editor.model
+            : undefined
+        }
+      />
 
       {draft.kind !== "none" && candidates.length > 0 ? (
         <ProviderStep

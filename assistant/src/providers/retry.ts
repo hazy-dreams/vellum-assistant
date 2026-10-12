@@ -91,6 +91,7 @@ const PROMPT_CACHE_KEY_PROVIDERS = new Set([
 
 /** Providers that support the `effort` config (extended thinking / reasoning). */
 const EFFORT_SUPPORTED_PROVIDERS = new Set([
+  "claude-agent-sdk",
   "anthropic",
   "openai",
   "openrouter",
@@ -142,6 +143,7 @@ function disabledThinkingForcesEffortNone(
  * `thinkingConfig.thinkingLevel`.
  */
 const THINKING_AWARE_PROVIDERS = new Set([
+  "claude-agent-sdk",
   "anthropic",
   "openrouter",
   "vercel-ai-gateway",
