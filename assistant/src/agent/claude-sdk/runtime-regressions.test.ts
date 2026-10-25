@@ -17,6 +17,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { assertNotLiveDb } from "../../__tests__/assert-not-live-db.js";
 import { getConfig } from "../../config/loader.js";
+import type { Conversation } from "../../daemon/conversation.js";
 import { getToolResultFilePath } from "../../context/post-turn-tool-result-truncation.js";
 import {
   registerPluginHooks,
@@ -871,6 +872,96 @@ describe("Claude SDK root runtime regressions", () => {
     );
     expect(JSON.stringify(second.prompts[0])).not.toContain("First answer");
     expect(resumed.history).toHaveLength(4);
+  });
+
+  test("foreground helper foreground keeps one native session with appended-only requests", async () => {
+    const { createResolveToolsCallback } =
+      await import("../../daemon/conversation-tool-setup.js");
+    const { asConversation } =
+      await import("../../__tests__/helpers/mock-conversation.js");
+    const directory = await mkdtemp(join(tmpdir(), "sdk-presence-continuity-"));
+    cleanups.push(async () => {
+      assertNotLiveDb(directory);
+      await rm(directory, { recursive: true, force: true });
+    });
+    const ctx: Conversation = asConversation({
+      conversationId: "sdk-presence-fixture",
+      transportInterface: "web",
+      clientOs: "macos",
+      currentTurnClientOs: "macos",
+      currentTurnIsNonInteractive: false,
+      toolsDisabledDepth: 0,
+      skillProjectionState: new Map(),
+      skillProjectionCache: { fingerprints: new Map() },
+      getTurnActorPrincipalId: () => undefined,
+    });
+    Object.defineProperty(ctx, "hasNoClient", {
+      get: () => ctx.currentTurnIsNonInteractive ?? true,
+    });
+    const resolve = createResolveToolsCallback(
+      [
+        definition("first_tool"),
+        definition("ask_question"),
+        definition("request_system_permission"),
+      ],
+      ctx,
+    )!;
+    const first = transport(async function* ({ options }) {
+      yield* toolFrames("original-action");
+      const client = await connect(options.mcpServers?.vellum);
+      await authorize(options, "original-action");
+      await invoke(client, "original-action");
+      yield* textBlocks("first-reply", ["First complete"]);
+      yield result();
+    });
+    first.options.tools = resolve([]);
+    first.options.conversationDir = directory;
+    const firstOutput = await runClaudeSdkAgent(first.options);
+    expect(firstOutput.error).toBeUndefined();
+    expect(first.execute).toHaveBeenCalledTimes(1);
+    const sessionId = first.sdkOptions[0]?.sessionId;
+    expect(sessionId).toBeDefined();
+    let history = firstOutput.history;
+    const firstPrefix = JSON.stringify(history);
+    for (const [nonInteractive, text] of [
+      [
+        true,
+        "Helper completed\n<non_interactive_context>Do not ask questions.</non_interactive_context>",
+      ],
+      [false, "Next foreground request"],
+    ] as const) {
+      ctx.currentTurnIsNonInteractive = nonInteractive;
+      const next = transport(async function* () {
+        yield* textBlocks("continuation-reply", ["Continued"]);
+        yield result();
+      });
+      const prefix = JSON.stringify(history);
+      next.options.tools = resolve(history);
+      next.options.conversationDir = directory;
+      next.options.canonicalMessages = [
+        ...history,
+        { role: "user", content: [{ type: "text", text }] },
+      ];
+      next.options.run.messages = next.options.canonicalMessages;
+      const output = await runClaudeSdkAgent(next.options);
+      expect(output.error).toBeUndefined();
+      expect(next.sdkOptions[0]?.resume).toBe(sessionId);
+      expect(next.sdkOptions[0]?.sessionId).toBeUndefined();
+      expect(JSON.stringify(next.options.tools)).toBe(
+        JSON.stringify(first.options.tools),
+      );
+      expect(JSON.stringify(next.prompts[0])).toContain(text.split("\n")[0]!);
+      expect(JSON.stringify(next.prompts[0])).not.toContain("original-action");
+      expect(JSON.stringify(next.prompts[0])).not.toContain(
+        "Complete the requested task",
+      );
+      expect(JSON.stringify(history)).toBe(prefix);
+      expect(next.execute).not.toHaveBeenCalled();
+      history = output.history;
+    }
+    expect(JSON.stringify(history.slice(0, firstOutput.history.length))).toBe(
+      firstPrefix,
+    );
   });
 
   test("a failed tool-surface removal stops before exposing the replacement", async () => {

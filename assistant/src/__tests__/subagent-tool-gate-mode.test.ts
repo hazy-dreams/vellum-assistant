@@ -335,23 +335,21 @@ describe("createResolveToolsCallback — toolContextPin", () => {
     expect(liveSlackUiShow.description).toContain("dynamic_page");
   });
 
-  test("control: without a pin, a clientless fork drops client-gated tools but keeps host and UI tools", () => {
+  test("without a pin, clientless forks keep question definitions but not question execution", () => {
     projectedSkillToolNames = [];
-    const resolve = createResolveToolsCallback(
-      CLIENT_GATED_DEFS,
-      clientlessExecutionCtx(),
-    )!;
+    const ctx = clientlessExecutionCtx();
+    const resolve = createResolveToolsCallback(CLIENT_GATED_DEFS, ctx)!;
 
-    // Host tool definitions stay on the wire for background turns, and
-    // ui_show stays because background UI surfaces persist and return. The
-    // executor rejects host tools on explicitly non-interactive turns before
-    // dispatch; ask_question and request_system_permission remain
-    // client-gated at resolution.
+    // Presence does not change the wire prefix. System permissions still
+    // require a supported OS; question execution still requires presence.
     expect(resolve(EMPTY_HISTORY).map((t) => t.name)).toEqual([
       "remember",
       "host_bash",
       "ui_show",
+      "ask_question",
     ]);
+    expect(ctx.allowedToolNames?.has("ask_question")).toBe(false);
+    expect(ctx.allowedToolNames?.has("request_system_permission")).toBe(false);
   });
 
   test("a desktop-source pin restores the host/UI/client tool defs on the wire", () => {
@@ -373,27 +371,25 @@ describe("createResolveToolsCallback — toolContextPin", () => {
     expect(names).toEqual(["ask_question", "host_bash", "remember", "ui_show"]);
   });
 
-  test("the pin REPLACES the live context — absent pin fields do not fall through", () => {
+  test("the pin replaces live context: absent OS and presence fields do not fall through", () => {
     projectedSkillToolNames = [];
-    // Live ctx claims an interactive macOS client; the pin says clientless.
-    // Client-gated tools must drop, proving pinned-undefined beats live.
-    const resolve = createResolveToolsCallback(
-      CLIENT_GATED_DEFS,
-      clientlessExecutionCtx({
-        hasNoClient: false,
-        transportInterface: "macos",
-        toolContextPin: { hasNoClient: true },
-      }),
-    )!;
+    const ctx = clientlessExecutionCtx({
+      hasNoClient: false,
+      transportInterface: "macos",
+      toolContextPin: { hasNoClient: true },
+    });
+    const resolve = createResolveToolsCallback(CLIENT_GATED_DEFS, ctx)!;
 
-    // Host tool definitions stay on the wire for background turns, and
-    // ui_show survives the clientless pin: it persists and returns. The
-    // executor rejects host tools on explicitly non-interactive turns.
+    // Pinned missing OS excludes system permissions. The question definition
+    // stays on the wire, but the pinned presence still denies execution.
     expect(resolve(EMPTY_HISTORY).map((t) => t.name)).toEqual([
       "remember",
       "host_bash",
       "ui_show",
+      "ask_question",
     ]);
+    expect(ctx.allowedToolNames?.has("ask_question")).toBe(false);
+    expect(ctx.allowedToolNames?.has("request_system_permission")).toBe(false);
   });
 
   test("invariant: a pinned-in tool is on the wire but can never execute", async () => {

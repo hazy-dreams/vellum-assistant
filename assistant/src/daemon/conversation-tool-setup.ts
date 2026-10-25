@@ -748,15 +748,19 @@ function isToolSupportedOnClientOs(name: string, ctx: Conversation): boolean {
   });
 }
 
-/**
- * Determine whether a tool is part of the final exposed tool set for the
- * current turn. This helper mirrors the filtering applied by
- * `createResolveToolsCallback` — including the subagent allowlist,
- * `toolsDisabledDepth`, and disk-pressure cleanup restrictions.
- */
+/** Current context eligibility, including presence-dependent execution gates. */
 export function isToolActiveForContext(
   name: string,
   ctx: Conversation,
+): boolean {
+  return isToolEligibleForContext(name, ctx, "execution");
+}
+
+/** Wire presence is stable; execution still requires a human for UI requests. */
+function isToolEligibleForContext(
+  name: string,
+  ctx: Conversation,
+  purpose: "wire" | "execution",
 ): boolean {
   // Execution-gate-mode wakes pin the client-context inputs so the wire tool
   // surface matches the SOURCE conversation's live turns rather than the
@@ -869,7 +873,7 @@ export function isToolActiveForContext(
       // avoids a 5-minute prompter timeout when the LLM would otherwise call it.
       return false;
     }
-    return !hasNoClient;
+    return purpose === "wire" || !hasNoClient;
   }
   if (PLATFORM_TOOL_NAMES.has(name)) {
     // Check the *client's* platform, not the daemon's process.platform.
@@ -879,7 +883,7 @@ export function isToolActiveForContext(
       (clientOs === "macos" ||
         clientOs === "windows" ||
         clientOs === "linux") &&
-      !hasNoClient
+      (purpose === "wire" || !hasNoClient)
     );
   }
   if (SUBAGENT_ONLY_TOOL_NAMES.has(name)) {
@@ -1107,11 +1111,10 @@ export function createResolveToolsCallback(
         : effectiveEnabledPluginSet.has(ownerId);
     });
 
-    // Filter core + plugin tools based on current conversation context so that
-    // tools irrelevant to this turn (e.g. UI tools when no client is connected)
-    // are omitted from the definitions sent to the provider.
+    // Presence alone cannot change the provider's tool prefix. Execution
+    // eligibility is resolved separately before building allowedToolNames.
     const filteredCoreDefs = [...coreToolDefs, ...scopedPluginDefs].filter(
-      (d) => isToolActiveForContext(d.name, ctx),
+      (d) => isToolEligibleForContext(d.name, ctx, "wire"),
     );
 
     // When the conversation is acting as a subagent, restrict core tools to
@@ -1164,6 +1167,15 @@ export function createResolveToolsCallback(
         : currentWorkspaceDefs
     ).filter((d) => !readOnlyHidesFromWire(d.name));
     const excluded = new Set(getConfig().tools.exclude);
+    const executionBaseNames = new Set(
+      [
+        ...scopedCoreDefs.filter((d) => isToolActiveForContext(d.name, ctx)),
+        ...scopedWorkspaceDefs,
+        ...scopedMcpDefs,
+      ]
+        .filter((d) => !excluded.has(d.name))
+        .map((d) => d.name),
+    );
     // UI definitions stay identical across channel and background turns.
     // Channel renderers enforce their supported surface subset at execution,
     // while background calls persist the full surface content for the next
@@ -1234,7 +1246,7 @@ export function createResolveToolsCallback(
             }
           : undefined,
     });
-    const turnAllowed = new Set(allBaseDefs.map((d) => d.name));
+    const turnAllowed = executionBaseNames;
     for (const name of projection.allowedToolNames) {
       // When a wire-gated subagent allowlist is active, exclude skill tools
       // not on it. (Execution gate mode keeps them available here and

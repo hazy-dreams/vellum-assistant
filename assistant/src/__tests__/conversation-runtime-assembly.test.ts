@@ -1176,6 +1176,61 @@ describe("applyRuntimeInjections — injection mode", () => {
     );
   });
 
+  test("helper guidance appends without changing the canonical prefix on either transition", async () => {
+    const first: Message[] = [
+      { role: "user", content: [{ type: "text", text: "Original request" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Original answer" }],
+      },
+    ];
+    const before = JSON.stringify(first);
+    const helper = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Helper finished" }],
+    };
+    const input = [...first, helper];
+    const { messages: background, blocks } = await applyRuntimeInjections(
+      input,
+      fullOptions,
+    );
+    expect(JSON.stringify(first)).toBe(before);
+    expect(JSON.stringify(background.slice(0, first.length))).toBe(before);
+    expect(helper.content).toHaveLength(1);
+    expect(JSON.stringify(background.at(-1))).toContain(
+      "<non_interactive_context>",
+    );
+    expect(blocks.nonInteractiveContextBlock).toBe(
+      NON_INTERACTIVE_CONTEXT_BLOCK,
+    );
+    const completed: Message[] = [
+      ...background,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Helper incorporated" }],
+      },
+    ];
+    const backgroundPrefix = JSON.stringify(completed);
+    const { messages: foreground } = await applyRuntimeInjections(
+      [
+        ...completed,
+        { role: "user", content: [{ type: "text", text: "User returned" }] },
+      ],
+      {
+        ...fullOptions,
+        isNonInteractive: false,
+        requestId: "next-foreground",
+        turnIndex: 1,
+      },
+    );
+    expect(JSON.stringify(foreground.slice(0, completed.length))).toBe(
+      backgroundPrefix,
+    );
+    expect(JSON.stringify(foreground.at(-1))).not.toContain(
+      "<non_interactive_context>",
+    );
+  });
+
   test("explicit mode: 'full' behaves the same as default", async () => {
     const { messages: result } = await applyRuntimeInjections(baseMessages, {
       ...fullOptions,
