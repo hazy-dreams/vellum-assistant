@@ -513,9 +513,14 @@ export class WorkflowRunManager {
     try {
       await this.deps.wake({
         conversationId: ctx.conversationId,
-        hint: summary,
+        hint: "A workflow completed. Review its result and continue the conversation if needed.",
         source: WORKFLOW_WAKE_SOURCE,
         trustContext: ctx.trustContext,
+        clientless: true,
+        persistTriggerAsEvent: true,
+        // The summary includes agent output and user-provided labels. Keep it
+        // durable without promoting any of that content into instructions.
+        untrustedOutput: { content: summary, source: "tool_result" },
       });
     } catch (err) {
       log.warn(

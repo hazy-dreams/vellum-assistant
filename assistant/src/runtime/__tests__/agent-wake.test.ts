@@ -388,11 +388,14 @@ import {
   setConversation,
 } from "../../daemon/conversation-registry.js";
 import { stripAgedSightFrames } from "../../daemon/conversation-sight-frames.js";
+import { steerToMessage } from "../../daemon/handlers/conversations.js";
+import { QuestionPrompter } from "../../permissions/question-prompter.js";
 import { ContextOverflowError, type Message } from "../../providers/types.js";
 import {
   __resetWakeChainForTests,
   wakeAgentForOpportunity,
 } from "../agent-wake.js";
+import * as pendingInteractions from "../pending-interactions.js";
 
 // ── Test helpers ─────────────────────────────────────────────────────
 
@@ -473,6 +476,8 @@ function makeWakeConversation(options: {
   wakeConvRegistry.set(conversationId, probe);
 
   let processing = options.isProcessing ?? false;
+  let processingOwner = 0;
+  let nextProcessingOwner = 0;
   const idleWaiters = new Set<() => void>();
   let order = 0;
   let activeAllowedTools = options.initialAllowedTools;
@@ -577,11 +582,43 @@ function makeWakeConversation(options: {
     messages,
     getMessages: () => messages,
     isProcessing: () => processing,
+    abortController: null as AbortController | null,
+    acquireProcessing() {
+      if (processing) {
+        return null;
+      }
+      this.setProcessing(true);
+      return processingOwner;
+    },
+    ensureProcessingMarker: async () => {},
+    async acquireProcessingFenced() {
+      const owner = this.acquireProcessing();
+      if (owner === null) {
+        return null;
+      }
+      try {
+        await this.ensureProcessingMarker();
+      } catch (err) {
+        this.releaseProcessing(owner);
+        throw err;
+      }
+      return this.holdsProcessingClaim(owner) ? owner : null;
+    },
+    holdsProcessingClaim: (owner: number) =>
+      processing && processingOwner === owner,
+    releaseProcessing(owner: number) {
+      if (!this.holdsProcessingClaim(owner)) {
+        return false;
+      }
+      this.setProcessing(false);
+      return true;
+    },
     setProcessing: (on: boolean) => {
       if (on && processing) {
         probe.processingLockStomps += 1;
       }
       processing = on;
+      processingOwner = on ? ++nextProcessingOwner : 0;
       probe.processingToggles.push(on);
       probe.callSequence.push(on ? "processing:true" : "processing:false");
       // Mirrors Conversation.setProcessing: a clear releases pending
@@ -4149,5 +4186,428 @@ describe("scheduled wake cancellation", () => {
     expect(conversation.isProcessing()).toBe(false);
     expect(conversation.abortController).toBeNull();
     expect(conversation.currentTurnCronRunId).toBeUndefined();
+  });
+});
+
+describe("wake cancellation ownership", () => {
+  test("real steering aborts a workflow wake and waits for its full unwind before foreground drain", async () => {
+    const running = Promise.withResolvers<void>();
+    const unwind = Promise.withResolvers<void>();
+    const abortObserved = Promise.withResolvers<void>();
+    let wakeSettled = false;
+    let signal: AbortSignal | undefined;
+    const conversation = makeWakeConversation({
+      conversationId: "conv-workflow-steer",
+      runImpl: async (input, onEvent, options) => {
+        signal = options?.signal;
+        signal?.addEventListener("abort", () => abortObserved.resolve(), {
+          once: true,
+        });
+        running.resolve();
+        await unwind.promise;
+        wakeSettled = true;
+        await onEvent({
+          type: "agent_loop_exit",
+          reason: "aborted_during_tools",
+        });
+        return runResult(input);
+      },
+    });
+    const queued = { requestId: "foreground-1", metadata: {} };
+    Object.assign(conversation, {
+      queue: {
+        findByRequestId: () => queued,
+        promoteToHead: () => queued,
+      },
+      denyAllPendingConfirmations: () => {},
+    });
+    const drain = conversation.kickDrainQueue.bind(conversation);
+    let prematureDrain = false;
+    conversation.kickDrainQueue = async (...args) => {
+      prematureDrain ||= !wakeSettled;
+      await drain(...args);
+    };
+    setConversation(conversation.conversationId, conversation);
+    const wake = wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+        clientless: true,
+      },
+      { resolveTarget: async () => conversation },
+    );
+    try {
+      await running.promise;
+      expect(
+        steerToMessage(conversation.conversationId, queued.requestId),
+      ).toEqual({ steered: true });
+      expect(prematureDrain).toBe(false);
+      expect(conversation.isProcessing()).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      await abortObserved.promise;
+      expect(conversation.drainQueueCalls).toBe(0);
+    } finally {
+      unwind.resolve();
+      expect(await wake).toMatchObject({ invoked: false, reason: "run_error" });
+      deleteConversation(conversation.conversationId);
+    }
+    expect(conversation.drainQueueCalls).toBe(1);
+    expect(conversation.abortController).toBeNull();
+    expect(conversation.isProcessing()).toBe(false);
+  });
+
+  test("non-cron cancellation settles a real parked question before drain", async () => {
+    const parked = Promise.withResolvers<void>();
+    const conversation = makeWakeConversation({
+      conversationId: "conv-wake-question",
+      runImpl: async (input, onEvent, options) => {
+        const answer = new QuestionPrompter().prompt({
+          conversationId: conversation.conversationId,
+          signal: options?.signal,
+          questions: [
+            {
+              question: "Continue?",
+              options: [
+                { id: "yes", label: "Yes" },
+                { id: "no", label: "No" },
+              ],
+            },
+          ],
+        });
+        parked.resolve();
+        expect((await answer).overall).toBe("aborted");
+        await onEvent({
+          type: "agent_loop_exit",
+          reason: "aborted_during_tools",
+        });
+        return runResult(input);
+      },
+    });
+    const wake = wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    await parked.promise;
+    expect(
+      pendingInteractions.getByConversation(conversation.conversationId),
+    ).toHaveLength(1);
+    conversation.abortController!.abort();
+    expect(await wake).toMatchObject({ invoked: false, reason: "run_error" });
+    expect(
+      pendingInteractions.getByConversation(conversation.conversationId),
+    ).toHaveLength(0);
+    expect(conversation.isProcessing()).toBe(false);
+  });
+
+  test("queued wakes remain FIFO around a normal foreground drain and cannot clear its controller", async () => {
+    const started = Promise.withResolvers<void>();
+    const finishFirst = Promise.withResolvers<void>();
+    const foregroundStarted = Promise.withResolvers<void>();
+    const finishForeground = Promise.withResolvers<void>();
+    const sequence: string[] = [];
+    const foregroundController = new AbortController();
+    const conversation = makeWakeConversation({
+      conversationId: "conv-wake-foreground-fifo",
+      runImpl: async (input) => {
+        sequence.push(`wake:${conversation.runCalls.length}`);
+        if (conversation.runCalls.length === 1) {
+          started.resolve();
+          await finishFirst.promise;
+        }
+        return runResult(input);
+      },
+    });
+    let drainCount = 0;
+    conversation.kickDrainQueue = async () => {
+      if (++drainCount !== 1) {
+        return;
+      }
+      expect(conversation.abortController).toBeNull();
+      expect(conversation.currentTurnCronRunId).toBeUndefined();
+      const owner = conversation.acquireProcessing()!;
+      conversation.abortController = foregroundController;
+      sequence.push("foreground:start");
+      foregroundStarted.resolve();
+      await finishForeground.promise;
+      expect(conversation.abortController).toBe(foregroundController);
+      sequence.push("foreground:end");
+      conversation.abortController = null;
+      conversation.releaseProcessing(owner);
+    };
+    const options = {
+      conversationId: conversation.conversationId,
+      source: "workflow",
+      hint: "Workflow completed",
+    };
+    const deps = { resolveTarget: async () => conversation };
+    const first = wakeAgentForOpportunity(options, deps);
+    await started.promise;
+    const second = wakeAgentForOpportunity(options, deps);
+    finishFirst.resolve();
+    await foregroundStarted.promise;
+    expect(conversation.runCalls).toHaveLength(1);
+    expect(conversation.isProcessing()).toBe(true);
+    expect(conversation.abortController).toBe(foregroundController);
+    finishForeground.resolve();
+    await Promise.all([first, second]);
+    expect(sequence).toEqual([
+      "wake:1",
+      "foreground:start",
+      "foreground:end",
+      "wake:2",
+    ]);
+    expect(conversation.isProcessing()).toBe(false);
+    expect(conversation.abortController).toBeNull();
+  });
+
+  test("a non-cron wake clears inherited cron scope only for its owned turn", async () => {
+    const conversation = makeWakeConversation({
+      conversationId: "conv-no-cron-scope",
+      runImpl: async (input) => {
+        expect(conversation.currentTurnCronRunId).toBeNull();
+        return runResult(input);
+      },
+    });
+    conversation.currentTurnCronRunId = "prior-run";
+    conversation.maybeCompact = async () => {
+      expect(conversation.currentTurnCronRunId).toBeUndefined();
+      expect(conversation.abortController).not.toBeNull();
+      return null;
+    };
+    await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    expect(conversation.currentTurnCronRunId).toBe("prior-run");
+  });
+
+  test("a cancelled non-cron compaction does not append a trigger or start the loop", async () => {
+    const conversation = makeWakeConversation({
+      conversationId: "conv-compact-cancel",
+    });
+    conversation.maybeCompact = async () => {
+      expect(conversation.abortController).not.toBeNull();
+      conversation.abortController!.abort();
+      return null;
+    };
+    const result = await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+        persistTriggerAsEvent: true,
+      },
+      { resolveTarget: async () => conversation },
+    );
+    expect(result).toMatchObject({ invoked: false, reason: "run_error" });
+    expect(conversation.runCalls).toHaveLength(0);
+    expect(conversation.pushedMessages).toHaveLength(0);
+    expect(conversation.persistedTailCalls).toHaveLength(0);
+    expect(conversation.abortController).toBeNull();
+    expect(conversation.isProcessing()).toBe(false);
+  });
+
+  test("cancellation at a checkpoint preserves completed effects once and stops before a new step", async () => {
+    const assistant: Message = {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "call-1", name: "example_tool", input: {} },
+      ],
+    };
+    const result: Message = {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call-1",
+          content: "completed once",
+        },
+      ],
+    };
+    let effects = 0;
+    const conversation = makeWakeConversation({
+      conversationId: "conv-checkpoint-cancel",
+      runImpl: async (input, _onEvent, options) => {
+        effects++;
+        const history = [...input, assistant, result];
+        conversation.abortController!.abort();
+        expect(
+          await options!.onCheckpoint!({
+            history,
+            turnIndex: 0,
+            toolCount: 1,
+            hasToolUse: true,
+          }),
+        ).toBe("handoff");
+        return runResult(history);
+      },
+    });
+    const wake = await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    expect(wake).toMatchObject({
+      invoked: true,
+      producedToolCalls: true,
+      exitReason: "aborted_during_tools",
+    });
+    expect(effects).toBe(1);
+    expect(conversation.persistedTailCalls).toEqual([assistant, result]);
+    expect(conversation.pushedMessages).toEqual([assistant, result]);
+    expect(conversation.drainQueueCalls).toBe(1);
+  });
+
+  test("a cancelled loop with no terminal event cannot report a clean no-op", async () => {
+    const conversation = makeWakeConversation({
+      conversationId: "conv-cancel-no-exit",
+      runImpl: async (input) => {
+        conversation.abortController!.abort();
+        return runResult(input);
+      },
+    });
+    expect(
+      await wakeAgentForOpportunity(
+        {
+          conversationId: conversation.conversationId,
+          source: "workflow",
+          hint: "Workflow completed",
+        },
+        { resolveTarget: async () => conversation },
+      ),
+    ).toMatchObject({ invoked: false, reason: "run_error" });
+    expect(conversation.drainQueueCalls).toBe(1);
+  });
+
+  test("steering during a pending processing marker waits for the fence to settle", async () => {
+    const markerStarted = Promise.withResolvers<void>();
+    const markerRelease = Promise.withResolvers<void>();
+    const conversation = makeWakeConversation({
+      conversationId: "conv-marker-steer",
+    });
+    conversation.ensureProcessingMarker = async () => {
+      markerStarted.resolve();
+      await markerRelease.promise;
+    };
+    const queued = { requestId: "foreground-marker", metadata: {} };
+    Object.assign(conversation, {
+      queue: { findByRequestId: () => queued, promoteToHead: () => queued },
+      denyAllPendingConfirmations: () => {},
+    });
+    setConversation(conversation.conversationId, conversation);
+    const wake = wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    try {
+      await markerStarted.promise;
+      expect(
+        steerToMessage(conversation.conversationId, queued.requestId),
+      ).toEqual({ steered: true });
+      expect(conversation.abortController?.signal.aborted).toBe(true);
+      expect(conversation.isProcessing()).toBe(true);
+      expect(conversation.drainQueueCalls).toBe(0);
+    } finally {
+      markerRelease.resolve();
+      expect(await wake).toMatchObject({ invoked: false, reason: "run_error" });
+      deleteConversation(conversation.conversationId);
+    }
+    expect(conversation.maybeCompactOrders).toHaveLength(0);
+    expect(conversation.runCalls).toHaveLength(0);
+    expect(conversation.isProcessing()).toBe(false);
+    expect(conversation.drainQueueCalls).toBe(1);
+  });
+
+  test("processing marker failure unwinds without entering compaction or the loop", async () => {
+    const conversation = makeWakeConversation({
+      conversationId: "conv-marker-failure",
+    });
+    conversation.ensureProcessingMarker = async () => {
+      throw new Error("marker failed");
+    };
+    await expect(
+      wakeAgentForOpportunity(
+        {
+          conversationId: conversation.conversationId,
+          source: "workflow",
+          hint: "Workflow completed",
+        },
+        { resolveTarget: async () => conversation },
+      ),
+    ).rejects.toThrow("marker failed");
+    expect(conversation.maybeCompactOrders).toHaveLength(0);
+    expect(conversation.runCalls).toHaveLength(0);
+    expect(conversation.isProcessing()).toBe(false);
+    expect(conversation.abortController).toBeNull();
+    expect(conversation.drainQueueCalls).toBe(1);
+  });
+
+  test("pre-run preparation failure releases the owned controller and processing claim", async () => {
+    const conversation = makeWakeConversation({
+      conversationId: "conv-preparation-throw",
+    });
+    conversation.trimAgedSightFrames = () => {
+      throw new Error("preparation failed");
+    };
+    await expect(
+      wakeAgentForOpportunity(
+        {
+          conversationId: conversation.conversationId,
+          source: "workflow",
+          hint: "Workflow completed",
+        },
+        { resolveTarget: async () => conversation },
+      ),
+    ).rejects.toThrow("preparation failed");
+    expect(conversation.isProcessing()).toBe(false);
+    expect(conversation.abortController).toBeNull();
+    expect(conversation.drainQueueCalls).toBe(1);
+  });
+
+  test("finishing a wake cannot release a successor's processing or controller", async () => {
+    const successor = new AbortController();
+    const successorPersona = { hasNoClient: false };
+    const conversation = makeWakeConversation({
+      conversationId: "conv-successor-owner",
+      runImpl: async (input) => {
+        conversation.setProcessing(false);
+        conversation.setProcessing(true);
+        conversation.abortController = successor;
+        conversation.currentTurnCronRunId = "successor-run";
+        conversation.currentTurnIsNonInteractive = false;
+        conversation.wakePersonaOverride = successorPersona;
+        return runResult(input);
+      },
+    });
+    await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        source: "workflow",
+        hint: "Workflow completed",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    expect(conversation.isProcessing()).toBe(true);
+    expect(conversation.abortController).toBe(successor);
+    expect(conversation.currentTurnCronRunId).toBe("successor-run");
+    expect(conversation.currentTurnIsNonInteractive).toBe(false);
+    expect(conversation.wakePersonaOverride).toBe(successorPersona);
+    expect(conversation.drainQueueCalls).toBe(0);
   });
 });

@@ -7,6 +7,7 @@ This is the maintained source branch for a private, Mac-local Vellum installatio
 - Claude subscription provider and settings UI from the original SDK integration, using native model discovery rather than additional version-pinned aliases.
 - GPT-6.1 Sol catalog/routing and 1M context metadata for the existing Claude aliases. Vellum's context budget is separate from native Claude context capacity.
 - Canonical parallel-tool result grouping, expected checkpoint interruption handling, conservative native guidance/session reuse, and cooperative explicit-tool yields with terminal acknowledgment.
+- [Stable native-history and workflow continuity](docs/juno-history-wake-continuity.md): display-only changes and same-role regrouping preserve safe reuse; background wakes own cancellation and processing; workflow results remain durable, fenced context.
 - Private macOS guards: fixed CLI target and bundled Bun; no public CLI fallback, shared locator/migration/cleanup, wrapper provisioning, automatic relocation, public updater or login-item writes.
 - Private build-only packaging with an explicit CLI parameter, Git-derived build stamp, no update feed or public CLI seed, deliberate ad-hoc signing and no automatic launch.
 

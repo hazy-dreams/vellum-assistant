@@ -10,8 +10,6 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 import { z } from "zod";
 
-import { getLogger } from "../../util/logger.js";
-
 import {
   isDecodableTextMimeType,
   keepFileAsWorkspaceRef,
@@ -24,11 +22,26 @@ import type {
   Message,
 } from "../../providers/types.js";
 import { ConfigError } from "../../util/errors.js";
+import { getLogger } from "../../util/logger.js";
 
 const SESSION_FILENAME = ".claude-sdk-session.json";
 const CONTEXT_VERSION = 1;
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const SessionSchema = z
+  .object({
+    version: z.literal(2),
+    conversationKey: HashSchema,
+    sessionId: z.string().uuid(),
+    fingerprint: HashSchema,
+    blockHashes: z.array(HashSchema),
+    inFlight: z.boolean(),
+    runId: z.string().uuid(),
+  })
+  .strict();
+
+// v1 hashes identify whole raw messages. They must never be interpreted as
+// v2 block hashes or discarded as absent: either would permit old work replay.
+const LegacySessionSchema = z
   .object({
     version: z.literal(1),
     conversationKey: HashSchema,
@@ -39,8 +52,13 @@ const SessionSchema = z
     runId: z.string().uuid(),
   })
   .strict();
+const StoredSessionSchema = z.discriminatedUnion("version", [
+  SessionSchema,
+  LegacySessionSchema,
+]);
 
 type SessionState = z.infer<typeof SessionSchema>;
+type StoredSessionState = z.infer<typeof StoredSessionSchema>;
 type PromptBlock = TextBlockParam | ImageBlockParam | DocumentBlockParam;
 
 export interface ClaudeSdkTurn {
@@ -106,6 +124,57 @@ function hashesMatchPrefix(prefix: string[], values: string[]): boolean {
   );
 }
 
+/** UI is presentation only. Opaque reasoning remains part of native identity. */
+function identityBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  return blocks.flatMap((block): ContentBlock[] => {
+    if (block.type === "ui_surface") {
+      return [];
+    }
+    if (block.type === "text") {
+      return [{ type: "text", text: block.text }];
+    }
+    if (block.type === "tool_result") {
+      const { contentBlocks, ...result } = block;
+      const nested = identityBlocks(contentBlocks ?? []);
+      return [
+        nested.length > 0 ? { ...result, contentBlocks: nested } : result,
+      ];
+    }
+    return [block];
+  });
+}
+
+function historyHashes(messages: Message[]): string[] {
+  return messages.flatMap((message) =>
+    identityBlocks(message.content).map((block) =>
+      hash({ role: message.role, block }),
+    ),
+  );
+}
+
+/** Splits within a message when role normalization crosses the saved frontier. */
+function splitHistory(
+  messages: Message[],
+  frontier: number,
+): [Message[], Message[]] {
+  const historical: Message[] = [];
+  const appended: Message[] = [];
+  let remaining = frontier;
+  for (const message of messages) {
+    const content = identityBlocks(message.content);
+    const before = content.slice(0, remaining);
+    const after = content.slice(remaining);
+    if (before.length > 0) {
+      historical.push({ role: message.role, content: before });
+    }
+    if (after.length > 0) {
+      appended.push({ role: message.role, content: after });
+    }
+    remaining = Math.max(0, remaining - content.length);
+  }
+  return [historical, appended];
+}
+
 function hasUserRequest(message: Message): boolean {
   return (
     message.role === "user" &&
@@ -150,14 +219,37 @@ export class ClaudeSdkSessionStore {
         );
       }
       const canonicalMessages = structuredClone(options.messages);
-      const inputHashes = canonicalMessages.map(hash);
-      const previous = await this.readState();
-      const matchingPrefix =
+      const inputHashes = historyHashes(canonicalMessages);
+      const stored = await this.readState();
+      const previous = stored?.version === 2 ? stored : undefined;
+      let frontier: number | undefined;
+      if (stored?.version === 1) {
+        // Migration proves only the original exact raw-message prefix, including
+        // opaque/media/UI fields. Harmless regrouping may be safe under v2, but
+        // v1 did not store enough evidence to prove it. Fail closed, not fresh.
+        if (
+          stored.conversationKey !== this.conversationKey ||
+          stored.messageHashes.length === 0 ||
+          !hashesMatchPrefix(stored.messageHashes, canonicalMessages.map(hash))
+        ) {
+          throw new ConfigError(
+            "Cannot safely migrate legacy Claude session history: the saved conversation prefix could not be verified. Restore the unchanged conversation history before adding a new request, or start a new conversation. The old prompt will not be replayed automatically.",
+          );
+        }
+        frontier = historyHashes(
+          canonicalMessages.slice(0, stored.messageHashes.length),
+        ).length;
+      } else if (
         previous?.conversationKey === this.conversationKey &&
-        hashesMatchPrefix(previous.messageHashes, inputHashes);
-      const appended = matchingPrefix
-        ? canonicalMessages.slice(previous.messageHashes.length)
-        : canonicalMessages;
+        hashesMatchPrefix(previous.blockHashes, inputHashes)
+      ) {
+        frontier = previous.blockHashes.length;
+      }
+      const matchingPrefix = frontier !== undefined;
+      const [historical, appended] =
+        frontier !== undefined
+          ? splitHistory(canonicalMessages, frontier)
+          : [[], canonicalMessages];
       if (!appended.some(hasUserRequest)) {
         throw new ConfigError(
           "Claude Agent needs a new user request. A completed or interrupted prompt cannot be replayed automatically.",
@@ -165,54 +257,50 @@ export class ClaudeSdkSessionStore {
       }
       const resume = Boolean(
         matchingPrefix &&
+        previous &&
         !previous.inFlight &&
         previous.fingerprint === options.fingerprint,
       );
       if (!resume) {
         // Diagnostics only (no content logged): why a turn could not resume.
         const firstMismatch = previous
-          ? previous.messageHashes.findIndex(
+          ? previous.blockHashes.findIndex(
               (entry, index) => entry !== inputHashes[index],
             )
           : -1;
-        const mismatchRole =
-          firstMismatch >= 0 ? canonicalMessages[firstMismatch]?.role : null;
-        const mismatchTypes =
-          firstMismatch >= 0 &&
-          Array.isArray(canonicalMessages[firstMismatch]?.content)
-            ? (
-                canonicalMessages[firstMismatch]!.content as Array<{
-                  type: string;
-                }>
-              ).map((block) => block.type)
-            : null;
         sessionLog.info(
           {
-            hasPrevious: !!previous,
-            keyMatch: previous?.conversationKey === this.conversationKey,
-            previousLength: previous?.messageHashes.length ?? null,
+            hasPrevious: !!stored,
+            keyMatch: stored?.conversationKey === this.conversationKey,
+            previousLength: stored
+              ? stored.version === 1
+                ? stored.messageHashes.length
+                : stored.blockHashes.length
+              : null,
             inputLength: inputHashes.length,
             firstMismatch,
-            mismatchRole,
-            mismatchTypes,
-            previousInFlight: previous?.inFlight ?? null,
-            fingerprintMatch: previous?.fingerprint === options.fingerprint,
+            previousInFlight: stored?.inFlight ?? null,
+            fingerprintMatch: stored?.fingerprint === options.fingerprint,
           },
           "Claude SDK session not resumed",
         );
       }
-      const messages = resume ? appended : canonicalMessages;
+      const messages = resume
+        ? appended
+        : matchingPrefix
+          ? [...historical, ...appended]
+          : canonicalMessages;
       const currentTurnStart = resume
         ? 0
         : matchingPrefix
-          ? previous.messageHashes.length
+          ? historical.length
           : lastRequestIndex(messages);
       const state: SessionState = {
-        version: 1,
+        version: 2,
         conversationKey: this.conversationKey,
         sessionId: resume ? previous!.sessionId : randomUUID(),
         fingerprint: options.fingerprint,
-        messageHashes: inputHashes,
+        blockHashes: inputHashes,
         inFlight: true,
         runId: randomUUID(),
       };
@@ -234,23 +322,24 @@ export class ClaudeSdkSessionStore {
   ): Promise<boolean> {
     return withSessionLock(this.path, async () => {
       const current = await this.readState();
-      const messageHashes = completedCanonicalMessages.map(hash);
+      const blockHashes = historyHashes(completedCanonicalMessages);
       if (
         !current ||
+        current.version !== 2 ||
         !current.inFlight ||
         current.conversationKey !== this.conversationKey ||
         current.runId !== turn.runId ||
         current.sessionId !== turn.sessionId ||
-        !hashesMatchPrefix(current.messageHashes, messageHashes)
+        !hashesMatchPrefix(current.blockHashes, blockHashes)
       ) {
         return false;
       }
-      await this.writeState({ ...current, messageHashes, inFlight: false });
+      await this.writeState({ ...current, blockHashes, inFlight: false });
       return true;
     });
   }
 
-  private async readState(): Promise<SessionState | undefined> {
+  private async readState(): Promise<StoredSessionState | undefined> {
     let text: string;
     try {
       text = await readFile(this.path, "utf8");
@@ -273,7 +362,7 @@ export class ClaudeSdkSessionStore {
     } catch {
       return undefined;
     }
-    const parsed = SessionSchema.safeParse(raw);
+    const parsed = StoredSessionSchema.safeParse(raw);
     return parsed.success ? parsed.data : undefined;
   }
 

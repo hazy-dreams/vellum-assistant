@@ -770,7 +770,8 @@ export async function wakeAgentForOpportunity(
     cronRunId: opts.cronRunId,
     startedAt: opts.backgroundToolCompletion?.startedAt,
   });
-  return runWakeSingleFlight<WakeResult>(conversationId, async () => {
+  let releaseWake: (() => Promise<void>) | undefined;
+  const executeWake = async (): Promise<WakeResult> => {
     // Snapshot the conversation's resting trust before the resolver runs, so
     // it can be restored after. The resolver leaves the wake's trust on the
     // conversation, and a following no-trust wake would otherwise pick it up
@@ -920,9 +921,6 @@ export async function wakeAgentForOpportunity(
     // try/finally that clears the override, so an earlier assignment would
     // strand the override on the cached Conversation and corrupt every later
     // prompt build on it.
-    if (opts.personaOverride) {
-      conversation.wakePersonaOverride = opts.personaOverride;
-    }
     const clearWakePersonaOverride = (): void => {
       if (opts.personaOverride) {
         conversation.wakePersonaOverride = undefined;
@@ -939,9 +937,13 @@ export async function wakeAgentForOpportunity(
     // observed the lock free, and nothing between its final `isProcessing()`
     // check and this acquisition awaits — keep that stretch await-free so
     // the lock cannot change hands in between.
-    const scheduleAbortController = opts.cronRunId
-      ? new AbortController()
-      : undefined;
+    const wakeAbortController = new AbortController();
+    let processingOwner: number | null = null;
+    const ownsWake = (): boolean =>
+      conversation.abortController === wakeAbortController &&
+      (processingOwner === null
+        ? !conversation.isProcessing()
+        : conversation.holdsProcessingClaim(processingOwner));
     const priorScheduledRunId = conversation.currentTurnCronRunId;
     const priorWorkOrigins = conversation.currentTurnWorkOrigins;
     const wakeWorkOrigins = opts.backgroundToolCompletion
@@ -956,11 +958,50 @@ export async function wakeAgentForOpportunity(
         ]
       : [];
     conversation.currentTurnWorkOrigins = wakeWorkOrigins;
-    if (scheduleAbortController) {
-      conversation.abortController = scheduleAbortController;
-      conversation.currentTurnCronRunId = opts.cronRunId;
+    conversation.abortController = wakeAbortController;
+    conversation.currentTurnCronRunId = opts.cronRunId;
+    let restoreTurnScope = (): void => {};
+    releaseWake = async () => {
+      // Restore scope before publishing idle. Waiters can acquire immediately.
+      if (!ownsWake()) {
+        return;
+      }
+      try {
+        restorePersistentWakeTrust();
+        restoreTurnScope();
+        desktopAutomationLease.releaseForConversation(conversationId);
+        if (conversation.currentTurnWorkOrigins === wakeWorkOrigins) {
+          conversation.currentTurnWorkOrigins = priorWorkOrigins;
+        }
+        conversation.currentTurnCronRunId = priorScheduledRunId;
+        clearWakePersonaOverride();
+      } finally {
+        conversation.abortController = null;
+        if (processingOwner !== null) {
+          conversation.releaseProcessing(processingOwner);
+        }
+      }
+      await kickWakeDrainQueue(conversation, "agent_wake_cleanup", {
+        conversationId,
+        source,
+      });
+    };
+    if (opts.personaOverride) {
+      conversation.wakePersonaOverride = opts.personaOverride;
     }
-    conversation.setProcessing(true);
+    processingOwner = await conversation.acquireProcessingFenced();
+    if (
+      processingOwner === null ||
+      !ownsWake() ||
+      wakeAbortController.signal.aborted ||
+      scheduledRunFailed()
+    ) {
+      return {
+        invoked: false,
+        producedToolCalls: false,
+        reason: opts.cronRunId ? "timeout" : "run_error",
+      };
+    }
 
     // ── Pre-run auto-compaction gate ──────────────────────────────────
     // The wake invokes `conversation.agentLoop.run()` with the loop's
@@ -1003,6 +1044,17 @@ export async function wakeAgentForOpportunity(
     // failure is non-fatal — the in-memory push keeps this run's prompt
     // consistent. The trigger is part of `baseline`, so `flushPendingTail`
     // never re-persists it.
+    if (
+      !ownsWake() ||
+      wakeAbortController.signal.aborted ||
+      scheduledRunFailed()
+    ) {
+      return {
+        invoked: false,
+        producedToolCalls: false,
+        reason: opts.cronRunId ? "timeout" : "run_error",
+      };
+    }
     if (opts.persistTriggerAsEvent) {
       const triggerMessage: Message = {
         role: "user",
@@ -1143,10 +1195,23 @@ export async function wakeAgentForOpportunity(
     // catch turns provider rejections and unhandled throws into a graceful
     // no-output stop instead of rethrowing).
     let terminalExitReason: AgentLoopExitReason | null = null;
+    const recordTerminalExit = (reason: AgentLoopExitReason): void => {
+      terminalExitReason = reason;
+    };
     // The `exitReason` field for an `invoked: true` result: present exactly
     // when the loop reported a terminal exit.
-    const exitReasonField = (): { exitReason?: AgentLoopExitReason } =>
-      terminalExitReason !== null ? { exitReason: terminalExitReason } : {};
+    const exitReasonField = (): { exitReason?: AgentLoopExitReason } => {
+      if (
+        wakeAbortController.signal.aborted &&
+        (terminalExitReason === null ||
+          CLEAN_NO_OUTPUT_EXIT_REASONS.has(terminalExitReason))
+      ) {
+        return { exitReason: "aborted_during_tools" };
+      }
+      return terminalExitReason !== null
+        ? { exitReason: terminalExitReason }
+        : {};
+    };
     const persistLog = (record: PendingLog): void => {
       try {
         recordRequestLog(
@@ -1175,6 +1240,9 @@ export async function wakeAgentForOpportunity(
       }
     };
     const safeEmit = (event: AgentEvent): void => {
+      if (!ownsWake()) {
+        return;
+      }
       try {
         emitWakeAgentEvent(conversation, event);
       } catch (err) {
@@ -1185,6 +1253,9 @@ export async function wakeAgentForOpportunity(
       }
     };
     const onEvent = (event: AgentEvent): void => {
+      if (!ownsWake()) {
+        return;
+      }
       // Compaction logging is observability, not turn state, so it writes
       // immediately even while buffering — a compaction during a silent
       // (never-goes-live) wake still happened and should be recorded.
@@ -1290,7 +1361,7 @@ export async function wakeAgentForOpportunity(
       // reason is stashed and applied in `goLive` after pendingLogs are
       // persisted, preserving the same ordering guarantee.
       if (event.type === "agent_loop_exit") {
-        terminalExitReason = event.reason;
+        recordTerminalExit(event.reason);
         if (mode === "buffering") {
           pendingExitReason = event.reason;
         } else {
@@ -1395,6 +1466,9 @@ export async function wakeAgentForOpportunity(
     const flushPendingTail = async (
       currentHistory: Message[],
     ): Promise<void> => {
+      if (!ownsWake()) {
+        return;
+      }
       const start = baselineLength + wakeHintMessageCount + persistedTailIndex;
       if (start >= currentHistory.length) {
         return;
@@ -1404,6 +1478,9 @@ export async function wakeAgentForOpportunity(
         conversation.messages.push(msg);
       }
       for (const msg of newMessages) {
+        if (!ownsWake()) {
+          return;
+        }
         try {
           const persistedId = await persistWakeTailMessage(conversation, msg);
           if (msg.role === "assistant") {
@@ -1477,21 +1554,14 @@ export async function wakeAgentForOpportunity(
      * is one function rather than a rebuild bolted onto either half.
      */
     const restoreWakeTurnScope = (): void => {
-      if (conversation.currentTurnWorkOrigins === wakeWorkOrigins) {
-        conversation.currentTurnWorkOrigins = priorWorkOrigins;
+      if (!ownsWake()) {
+        return;
       }
-      if (
-        scheduleAbortController &&
-        conversation.abortController === scheduleAbortController
-      ) {
-        conversation.abortController = null;
-        conversation.currentTurnCronRunId = priorScheduledRunId;
-      }
-      desktopAutomationLease.releaseForConversation(conversationId);
       restoreWakeAllowedTools();
       clearWakePersonaOverride();
       syncWakeLoopSystemPrompt();
     };
+    restoreTurnScope = restoreWakeTurnScope;
     const applyWakeAllowedTools = (): boolean => {
       if (!opts.allowedTools) {
         return true;
@@ -1527,16 +1597,18 @@ export async function wakeAgentForOpportunity(
     const onCheckpoint = async (
       checkpoint: CheckpointInfo,
     ): Promise<CheckpointDecision> => {
+      if (!ownsWake()) {
+        return "handoff";
+      }
       goLive(checkpoint.history);
       await flushPendingTail(checkpoint.history);
-      return "continue";
+      return wakeAbortController.signal.aborted ? "handoff" : "continue";
     };
 
     let runError: Error | null = null;
     let producedToolCalls = false;
     let toolUseNames: string[] = [];
     let tailMessageCount = 0;
-    let drainedInTry = false;
     // Set when the wake fails with `reason: "context_overflow"`. The finally
     // block skips its generic outcome log for this path — the failure
     // already logged its own dedicated warn line.
@@ -1573,9 +1645,17 @@ export async function wakeAgentForOpportunity(
     };
     let cancelledBeforeRun = false;
     try {
-      if (scheduleAbortController?.signal.aborted || scheduledRunFailed()) {
+      if (
+        !ownsWake() ||
+        wakeAbortController.signal.aborted ||
+        scheduledRunFailed()
+      ) {
         cancelledBeforeRun = true;
-        return { invoked: false, producedToolCalls: false, reason: "timeout" };
+        return {
+          invoked: false,
+          producedToolCalls: false,
+          reason: opts.cronRunId ? "timeout" : "run_error",
+        };
       }
       // ── Over-window policy under suppressed auto-compaction ─────────
       // The pre-run gate above is the wake's only compaction path (the
@@ -1673,7 +1753,7 @@ export async function wakeAgentForOpportunity(
       try {
         ({ history: updatedHistory } = await conversation.agentLoop.run({
           messages: runInput,
-          signal: scheduleAbortController?.signal,
+          signal: wakeAbortController.signal,
           onEvent,
           requestId: `wake:${source}`,
           onCheckpoint,
@@ -1748,20 +1828,37 @@ export async function wakeAgentForOpportunity(
           ...exitReasonField(),
         };
       } finally {
-        // Restore the pre-wake values so a queued user turn or background read
-        // never observes the wake's stamps. (`runAgentLoopImpl` re-stamps both
-        // at the start of the next normal turn regardless.)
-        conversation.currentCallSite = priorCallSite;
-        conversation.currentTurnOverrideProfile = priorTurnOverrideProfile;
-        conversation.currentTurnCronRunId = priorTurnCronRunId;
-        conversation.currentTurnIsNonInteractive = priorTurnIsNonInteractive;
-        conversation.currentTurnTrustContext = priorTurnTrust;
-        conversation.currentTurnSendUserMessageActive =
-          priorSendUserMessageActive;
-        // The prompt is part of what the wake stamped, so restore it with the
-        // rest rather than leaving the loop holding a wake-scoped prompt for
-        // whatever runs next.
-        conversation.syncLoopSystemPrompt();
+        if (ownsWake()) {
+          // Restore the pre-wake values so a queued user turn or background read
+          // never observes the wake's stamps. (`runAgentLoopImpl` re-stamps both
+          // at the start of the next normal turn regardless.)
+          conversation.currentCallSite = priorCallSite;
+          conversation.currentTurnOverrideProfile = priorTurnOverrideProfile;
+          conversation.currentTurnCronRunId = priorTurnCronRunId;
+          conversation.currentTurnIsNonInteractive = priorTurnIsNonInteractive;
+          conversation.currentTurnTrustContext = priorTurnTrust;
+          conversation.currentTurnSendUserMessageActive =
+            priorSendUserMessageActive;
+          // The prompt is part of what the wake stamped, so restore it with the
+          // rest rather than leaving the loop holding a wake-scoped prompt for
+          // whatever runs next.
+          conversation.syncLoopSystemPrompt();
+        }
+      }
+
+      if (!ownsWake()) {
+        return {
+          invoked: false,
+          producedToolCalls: false,
+          reason: "run_error",
+        };
+      }
+      if (
+        wakeAbortController.signal.aborted &&
+        (terminalExitReason === null ||
+          CLEAN_NO_OUTPUT_EXIT_REASONS.has(terminalExitReason))
+      ) {
+        recordTerminalExit("aborted_during_tools");
       }
 
       // The loop swallows provider rejections into a graceful no-output
@@ -1866,22 +1963,8 @@ export async function wakeAgentForOpportunity(
       goLive(updatedHistory);
       await flushPendingTail(updatedHistory);
 
-      // Drain queued messages AFTER tail is pushed + persisted so the
-      // next dequeued user message sees the complete, up-to-date
-      // history. setProcessing(false) must come first (the queue only
-      // accepts entries while processing === true, and drain expects
-      // processing to already be false). The finally block handles the
-      // error/early-return paths where no tail was produced.
-      restoreWakeTurnScope();
-      try {
-        conversation.setProcessing(false);
-      } catch (err) {
-        log.warn(
-          { conversationId, source, err },
-          "agent-wake: setProcessing(false) threw; continuing",
-        );
-      }
       if (
+        !wakeAbortController.signal.aborted &&
         !tailPersistenceFailed &&
         lastPersistedAssistantMessageId &&
         opts.backgroundToolCompletion &&
@@ -1890,18 +1973,13 @@ export async function wakeAgentForOpportunity(
       ) {
         completionAssistantMessageId = lastPersistedAssistantMessageId;
       }
-      await kickWakeDrainQueue(conversation, "agent_wake_tail", {
-        conversationId,
-        source,
-      });
-      drainedInTry = true;
-
       return { invoked: true, producedToolCalls, ...exitReasonField() };
     } finally {
       if (
         opts.backgroundToolCompletion &&
         wakeTriggerMessageId &&
-        (cancelledBeforeRun ||
+        (wakeAbortController.signal.aborted ||
+          cancelledBeforeRun ||
           runError ||
           (terminalExitReason !== null &&
             terminalExitReason !== "no_tool_calls" &&
@@ -1909,36 +1987,14 @@ export async function wakeAgentForOpportunity(
       ) {
         stampTurnOutcome(
           wakeTriggerMessageId,
-          cancelledBeforeRun ||
+          wakeAbortController.signal.aborted ||
+            cancelledBeforeRun ||
             String(terminalExitReason).startsWith("aborted_") ||
             terminalExitReason === "checkpoint_handoff"
             ? "cancelled"
             : "failed",
         );
       }
-      // Put the conversation's resting trust back on every exit path.
-      restorePersistentWakeTrust();
-      // The success path (above) already called setProcessing(false) and
-      // kicked the queue drain after tail persist. This catch-all handles the
-      // error and early-return paths where no tail was produced: those exit
-      // the try body before reaching the drain block, so `drainedInTry` is
-      // still false.
-      if (!drainedInTry) {
-        restoreWakeTurnScope();
-        try {
-          conversation.setProcessing(false);
-        } catch (err) {
-          log.warn(
-            { conversationId, source, err },
-            "agent-wake: setProcessing(false) threw; continuing",
-          );
-        }
-        await kickWakeDrainQueue(conversation, "agent_wake_cleanup", {
-          conversationId,
-          source,
-        });
-      }
-
       const durationMs = nowFn() - startedAt;
       const suppressWakeSurface = opts.suppressWakeSurface === true;
       if (failedContextOverflow || reportedSwallowedStopAsFailure) {
@@ -1991,7 +2047,10 @@ export async function wakeAgentForOpportunity(
         );
       }
     }
-  }).finally(() => {
+  };
+  return runWakeSingleFlight(conversationId, () =>
+    executeWake().finally(() => releaseWake?.()),
+  ).finally(() => {
     finishWake();
     if (opts.backgroundToolCompletion && wakeTriggerMessageId) {
       void emitBackgroundResultNotification({

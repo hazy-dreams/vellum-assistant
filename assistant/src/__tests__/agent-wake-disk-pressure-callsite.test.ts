@@ -64,10 +64,10 @@ import {
   __resetWakeChainForTests,
   wakeAgentForOpportunity,
 } from "../runtime/agent-wake.js";
+import { mockProcessingClaim } from "./helpers/mock-processing-claim.js";
 
 function makeTarget(): Conversation {
   const messages: Message[] = [];
-  let processing = false;
   const target = {
     conversationId: "conv-wake-callsite",
     agentLoop: {
@@ -82,11 +82,7 @@ function makeTarget(): Conversation {
     // frame, so the real pass would return the array unchanged too.
     trimAgedSightFrames: (msgs: Message[]) => msgs,
     getMessages: () => messages,
-    isProcessing: () => processing,
-    waitForIdle: async () => !processing,
-    setProcessing: (on: boolean) => {
-      processing = on;
-    },
+    ...mockProcessingClaim(),
     setTrustContext: () => {},
     getTurnChannelContext: () => null,
     getTurnInterfaceContext: () => null,

@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { getConfig } from "../../config/loader.js";
 import { SEND_USER_MESSAGE_TOOL_NAME } from "../../config/send-user-message-constants.js";
+import { preModelCallSanitize } from "../../context/outbound-sanitize.js";
 import { spoolAndStubOversizedToolResults } from "../../context/tool-result-spool.js";
 import type { AgentLoopExitReason } from "../../hooks/types.js";
 import { HOOKS } from "../../plugin-api/constants.js";
@@ -727,9 +728,18 @@ export async function runClaudeSdkAgent(
       executablePath: auth.executablePath,
     });
     const session = await store?.begin({ messages: history, fingerprint });
+    // A saved frontier can split a canonical message after role repair. Its
+    // boundary indexes that split, not the caller's unsplit outbound copy.
+    // Reapply the shared sanitizer only when the store has reshaped history;
+    // otherwise preserve the caller's prepared transport representation.
+    const promptMessages = session?.resume
+      ? preModelCallSanitize(session.messages)
+      : session && JSON.stringify(session.messages) !== JSON.stringify(history)
+        ? preModelCallSanitize(session.messages)
+        : run.messages;
     input.push(
       await prepareSdkPrompt(
-        session?.resume ? session.messages : run.messages,
+        promptMessages,
         session?.sessionId,
         session?.resume ? 0 : session?.currentTurnStart,
       ),

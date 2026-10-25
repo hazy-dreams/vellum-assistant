@@ -17,8 +17,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { assertNotLiveDb } from "../../__tests__/assert-not-live-db.js";
 import { getConfig } from "../../config/loader.js";
-import type { Conversation } from "../../daemon/conversation.js";
 import { getToolResultFilePath } from "../../context/post-turn-tool-result-truncation.js";
+import type { Conversation } from "../../daemon/conversation.js";
 import {
   registerPluginHooks,
   unregisterPluginHooks,
@@ -964,6 +964,217 @@ describe("Claude SDK root runtime regressions", () => {
     );
   });
 
+  test.each([
+    "ui-decoration",
+    "same-role-regrouping",
+    "changed-user-text",
+    "changed-tool-result",
+  ] as const)(
+    "runtime history continuity handles %s without replaying old actions",
+    async (mode) => {
+      const { repairHistory } =
+        await import("../history-repair/history-repair.js");
+      const directory = await sessionDirectory("sdk-history-continuity-");
+      const first = transport(async function* ({ options }) {
+        yield* toolFrames("already-performed-action");
+        const client = await connect(options.mcpServers?.vellum);
+        await authorize(options, "already-performed-action");
+        await invoke(client, "already-performed-action");
+        yield* textBlocks("first-answer", ["First answer"]);
+        yield* textBlocks("second-answer", ["Second answer"]);
+        yield result();
+      });
+      first.options.conversationDir = directory;
+      const initial = await runClaudeSdkAgent(first.options);
+      expect(initial.error).toBeUndefined();
+      expect(first.execute).toHaveBeenCalledTimes(1);
+      const initialSnapshot = JSON.stringify(initial.history);
+      let edited = structuredClone(initial.history);
+      const shouldResume =
+        mode === "ui-decoration" || mode === "same-role-regrouping";
+      if (mode === "ui-decoration") {
+        edited.at(-1)!.content.unshift({
+          type: "ui_surface",
+          surfaceId: "display-only-progress",
+          surfaceType: "card",
+          data: { status: "completed" },
+        });
+      } else if (mode === "same-role-regrouping") {
+        const repaired = repairHistory(edited);
+        expect(repaired.stats.consecutiveSameRoleMerged).toBeGreaterThan(0);
+        edited = repaired.messages;
+      } else if (mode === "changed-user-text") {
+        edited[0]!.content = [
+          { type: "text", text: "A genuinely different original request" },
+        ];
+      } else {
+        const toolResult = edited
+          .flatMap((message) => message.content)
+          .find((block) => block.type === "tool_result");
+        expect(toolResult).toBeDefined();
+        if (!toolResult || toolResult.type !== "tool_result") {
+          throw new Error("Missing fixture tool result");
+        }
+        toolResult.content = "A genuinely different result";
+      }
+      const second = transport(async function* () {
+        yield* textBlocks("next-answer", ["Continued safely"]);
+        yield result();
+      });
+      second.options.conversationDir = directory;
+      second.options.canonicalMessages = [
+        ...edited,
+        { role: "user", content: [{ type: "text", text: "Next request" }] },
+      ];
+      second.options.run.messages = second.options.canonicalMessages;
+      const output = await runClaudeSdkAgent(second.options);
+      expect(output.error).toBeUndefined();
+      expect(second.execute).not.toHaveBeenCalled();
+      expect(JSON.stringify(second.prompts[0])).toContain("Next request");
+      expect(JSON.stringify(initial.history)).toBe(initialSnapshot);
+      if (shouldResume) {
+        expect(second.sdkOptions[0]?.resume).toBe(
+          first.sdkOptions[0]?.sessionId,
+        );
+        expect(second.sdkOptions[0]?.sessionId).toBeUndefined();
+        expect(JSON.stringify(second.prompts[0])).not.toContain(
+          "already-performed-action",
+        );
+        expect(JSON.stringify(second.prompts[0])).not.toContain("First answer");
+      } else {
+        expect(second.sdkOptions[0]?.resume).toBeUndefined();
+        expect(second.sdkOptions[0]?.sessionId).toBeDefined();
+        expect(second.sdkOptions[0]?.sessionId).not.toBe(
+          first.sdkOptions[0]?.sessionId,
+        );
+        expect(JSON.stringify(second.prompts[0])).toContain(
+          "Past conversation context",
+        );
+      }
+    },
+  );
+
+  test.each(["dirty", "fingerprint"] as const)(
+    "a %s rebuild preserves a merged historical/current request boundary",
+    async (mode) => {
+      const directory = await sessionDirectory("sdk-rebuild-frontier-");
+      const first = transport(async function* () {
+        if (mode === "fingerprint") {
+          yield result();
+        }
+      });
+      first.options.conversationDir = directory;
+      first.options.run.messages = [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Old action request" }],
+        },
+      ];
+      await runClaudeSdkAgent(first.options);
+      const second = transport(async function* () {
+        yield* textBlocks("frontier-reply", ["No replay"]);
+        yield result();
+      });
+      second.options.conversationDir = directory;
+      second.options.run.messages = [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Old action request" },
+            { type: "ui_surface", surfaceId: "card", surfaceType: "card" },
+            { type: "text", text: "Check what happened, do not repeat it" },
+          ],
+        },
+      ];
+      second.options.canonicalMessages = second.options.run.messages;
+      if (mode === "fingerprint") {
+        second.options.systemPrompt = "Changed fixture instructions";
+      }
+      const output = await runClaudeSdkAgent(second.options);
+      expect(output.error).toBeUndefined();
+      expect(second.sdkOptions[0]?.resume).toBeUndefined();
+      expect(second.sdkOptions[0]?.sessionId).not.toBe(
+        first.sdkOptions[0]?.sessionId,
+      );
+      const prompt = JSON.stringify(second.prompts[0]);
+      expect(prompt).toContain("Old action request");
+      expect(prompt.slice(prompt.indexOf("Current request:"))).not.toContain(
+        "Old action request",
+      );
+      expect(prompt).toContain("Check what happened, do not repeat it");
+      expect(second.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  test("a reshaped rebuild still sanitizes historical provider-only blocks", async () => {
+    const { preModelCallSanitize } =
+      await import("../../context/outbound-sanitize.js");
+    const directory = await sessionDirectory("sdk-rebuild-sanitized-");
+    const first = transport(async function* () {
+      yield result();
+    });
+    first.options.conversationDir = directory;
+    first.options.canonicalMessages = [
+      { role: "user", content: [{ type: "text", text: "Old request" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "server_tool_use",
+            id: "search-old",
+            name: "web_search",
+            input: { query: "fixture" },
+          },
+          {
+            type: "web_search_tool_result",
+            tool_use_id: "search-old",
+            content: [
+              {
+                type: "web_search_result",
+                title: "Example",
+                url: "https://example.com",
+                encrypted_content: "expired-provider-token",
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    first.options.run.messages = preModelCallSanitize(
+      first.options.canonicalMessages,
+    );
+    await runClaudeSdkAgent(first.options);
+    const second = transport(async function* () {
+      yield* textBlocks("sanitized-reply", ["Done"]);
+      yield result();
+    });
+    second.options.conversationDir = directory;
+    second.options.systemPrompt = "Changed fixture instructions";
+    const canonical = structuredClone(first.options.canonicalMessages);
+    canonical[1]!.content.unshift({
+      type: "ui_surface",
+      surfaceId: "display",
+      surfaceType: "card",
+    });
+    second.options.canonicalMessages = [
+      ...canonical,
+      { role: "user", content: [{ type: "text", text: "New request" }] },
+    ];
+    second.options.run.messages = preModelCallSanitize(
+      second.options.canonicalMessages,
+    );
+    const output = await runClaudeSdkAgent(second.options);
+    expect(output.error).toBeUndefined();
+    expect(JSON.stringify(second.prompts[0])).toContain(
+      "Prior web_search results",
+    );
+    expect(JSON.stringify(second.prompts[0])).not.toContain(
+      "expired-provider-token",
+    );
+    expect(JSON.stringify(output.history)).toContain("expired-provider-token");
+    expect(second.execute).not.toHaveBeenCalled();
+  });
+
   test("a failed tool-surface removal stops before exposing the replacement", async () => {
     const f = transport(async function* ({ options }) {
       yield* toolFrames("refresh-failure");
@@ -1349,26 +1560,32 @@ describe("Claude SDK root runtime regressions", () => {
     const directory = await sessionDirectory("sdk-unsafe-yield-");
     const abort = new AbortController();
     const hookAbort = new AbortController();
-    if (mode === "guidance")
+    if (mode === "guidance") {
       registerHooks({
         "post-tool-use": async (context: PostToolUseContext) => {
           context.additionalContext = "Still needs model continuation";
         },
       });
-    if (mode === "changed-history")
+    }
+    if (mode === "changed-history") {
       registerHooks({
         "post-model-call": async (context: PostModelCallContext) => {
           context.content.unshift({ type: "text", text: "Changed history" });
         },
       });
+    }
     const f = transport(async function* ({ options }) {
       yield* toolFrames("unsafe-yield");
       const client = await connect(options.mcpServers?.vellum);
       await authorize(options, "unsafe-yield");
       await invoke(client, "unsafe-yield");
-      if (mode === "pending-tool") yield* toolFrames("unresolved-peer");
-      if (mode === "hook-abort") hookAbort.abort();
-      if (mode !== "missing-hook")
+      if (mode === "pending-tool") {
+        yield* toolFrames("unresolved-peer");
+      }
+      if (mode === "hook-abort") {
+        hookAbort.abort();
+      }
+      if (mode !== "missing-hook") {
         await options.hooks!.PostToolBatch![0]!.hooks[0]!(
           {
             hook_event_name: "PostToolBatch",
@@ -1380,12 +1597,19 @@ describe("Claude SDK root runtime regressions", () => {
           undefined,
           { signal: hookAbort.signal },
         );
-      if (mode === "late-hook-abort") hookAbort.abort();
-      if (mode === "abort") abort.abort();
-      if (mode === "continued-model")
+      }
+      if (mode === "late-hook-abort") {
+        hookAbort.abort();
+      }
+      if (mode === "abort") {
+        abort.abort();
+      }
+      if (mode === "continued-model") {
         yield* textBlocks("unexpected-after-stop", ["Should not infer again"]);
-      if (mode === "stream-error")
+      }
+      if (mode === "stream-error") {
         throw new Error("Unrelated native stream failure");
+      }
       if (mode !== "missing-result") {
         if (mode === "error-result") {
           const { result: _result, ...rest } = yieldResult();
@@ -1395,7 +1619,7 @@ describe("Claude SDK root runtime regressions", () => {
             is_error: true,
             errors: ["Native failure"],
           };
-        } else
+        } else {
           yield {
             ...yieldResult(),
             ...(mode === "wrong-terminal"
@@ -1403,8 +1627,11 @@ describe("Claude SDK root runtime regressions", () => {
               : {}),
             ...(mode === "success-is-error" ? { is_error: true } : {}),
           };
+        }
       }
-      if (mode === "post-result-hook-abort") hookAbort.abort();
+      if (mode === "post-result-hook-abort") {
+        hookAbort.abort();
+      }
     });
     f.options.conversationDir = directory;
     f.options.run.signal = abort.signal;
@@ -1413,10 +1640,12 @@ describe("Claude SDK root runtime regressions", () => {
       isError: false,
       yieldToUser: true,
     }));
-    if (mode === "changed-tools")
+    if (mode === "changed-tools") {
       f.options.resolveTools = () => [definition("changed_tool")];
-    if (mode === "checkpoint")
+    }
+    if (mode === "checkpoint") {
       f.options.run.onCheckpoint = async () => "handoff" as const;
+    }
     const output = await runClaudeSdkAgent(f.options);
     await expectDirty(directory);
     if (
@@ -1435,7 +1664,9 @@ describe("Claude SDK root runtime regressions", () => {
       expect(output.reason).toBe("error");
       expect(output.error).toBeDefined();
     }
-    if (mode === "abort") expect(output.reason).toBe("aborted_via_error");
+    if (mode === "abort") {
+      expect(output.reason).toBe("aborted_via_error");
+    }
     if (mode === "checkpoint") {
       expect(output.reason).toBe("checkpoint_handoff");
       expect(f.interrupt).toHaveBeenCalledTimes(1);
@@ -1608,23 +1839,31 @@ describe("Claude SDK root runtime regressions", () => {
         await authorize(options, "guided-incomplete");
         await invoke(client, "guided-incomplete");
         await checkpoint(options);
-        if (mode === "abort") abort.abort();
-        if (mode === "provider-error")
+        if (mode === "abort") {
+          abort.abort();
+        }
+        if (mode === "provider-error") {
           throw new Error("Fixture stream failure");
-        if (mode !== "no-model-after-hook")
+        }
+        if (mode !== "no-model-after-hook") {
           yield* textBlocks("guided-tail", ["Done"]);
-        if (mode !== "missing-result") yield result();
+        }
+        if (mode !== "missing-result") {
+          yield result();
+        }
       });
       f.options.conversationDir = directory;
       f.options.run.signal = abort.signal;
-      if (mode === "handoff")
+      if (mode === "handoff") {
         f.options.run.onCheckpoint = async () => "handoff" as const;
-      if (mode === "yield")
+      }
+      if (mode === "yield") {
         f.execute.mockImplementation(async () => ({
           content: "User input needed",
           isError: false,
           yieldToUser: true,
         }));
+      }
       await runClaudeSdkAgent(f.options);
       await expectDirty(directory);
     },

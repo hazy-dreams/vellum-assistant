@@ -27,6 +27,7 @@ import {
   __resetWakeChainForTests,
   wakeAgentForOpportunity,
 } from "../runtime/agent-wake.js";
+import { mockProcessingClaim } from "./helpers/mock-processing-claim.js";
 
 /** Stands in for the `01-parallel-tasks` section's rendered body. */
 const DELEGATION_SECTION = "[delegation section]";
@@ -38,7 +39,6 @@ function makeTarget(onRun: (conv: Conversation) => void): {
   const messages: Message[] = [
     { role: "user", content: [{ type: "text", text: "hi" }] },
   ];
-  let processing = false;
   let loopPrompt = "";
 
   const target = {
@@ -58,11 +58,7 @@ function makeTarget(onRun: (conv: Conversation) => void): {
     messages,
     trimAgedSightFrames: (msgs: Message[]) => msgs,
     getMessages: () => messages,
-    isProcessing: () => processing,
-    waitForIdle: async () => !processing,
-    setProcessing: (on: boolean) => {
-      processing = on;
-    },
+    ...mockProcessingClaim(),
     setTrustContext: () => {},
     getTurnChannelContext: () => null,
     getTurnInterfaceContext: () => null,
