@@ -30,7 +30,10 @@ const QL_EXTENSIONS = [
 ];
 
 // electron-builder Arch enum → swiftc -target triple prefix
-const SWIFTC_TARGETS = { 1: "x86_64-apple-macosx15.0", 3: "arm64-apple-macosx15.0" };
+const SWIFTC_TARGETS = {
+  1: "x86_64-apple-macosx15.0",
+  3: "arm64-apple-macosx15.0",
+};
 
 /**
  * Build a Quick Look .appex bundle from Swift source.
@@ -47,12 +50,21 @@ const SWIFTC_TARGETS = { 1: "x86_64-apple-macosx15.0", 3: "arm64-apple-macosx15.
  * @param {string} swiftTarget - The swiftc -target triple (e.g. "arm64-apple-macosx15.0").
  * @returns {boolean} true if the extension was built successfully.
  */
-function buildQLExtension(ext, plugInsDir, appBundleId, identity, timestampFlag, swiftTarget) {
+function buildQLExtension(
+  ext,
+  plugInsDir,
+  appBundleId,
+  identity,
+  timestampFlag,
+  swiftTarget,
+) {
   // Resolve source directory relative to clients/macos/scripts/.
   const sourceDir = path.join(__dirname, "..", "native", "quicklook", ext.name);
 
   if (!fs.existsSync(sourceDir)) {
-    console.warn(`afterPack: ${ext.name} source not found at ${sourceDir}, skipping`);
+    console.warn(
+      `afterPack: ${ext.name} source not found at ${sourceDir}, skipping`,
+    );
     return false;
   }
 
@@ -81,7 +93,7 @@ function buildQLExtension(ext, plugInsDir, appBundleId, identity, timestampFlag,
         `-o "${binaryPath}"`,
         `"${sourceFile}"`,
       ].join(" "),
-      { stdio: "inherit" }
+      { stdio: "inherit" },
     );
   } catch (err) {
     console.error(`afterPack: failed to compile ${ext.name}: ${err.message}`);
@@ -114,10 +126,12 @@ function buildQLExtension(ext, plugInsDir, appBundleId, identity, timestampFlag,
   try {
     execSync(
       `codesign --force --options runtime --sign "${identity}"${timestampFlag} "${appexDir}"`,
-      { stdio: "inherit" }
+      { stdio: "inherit" },
     );
   } catch (err) {
-    console.error(`afterPack: failed to sign ${ext.name}.appex: ${err.message}`);
+    console.error(
+      `afterPack: failed to sign ${ext.name}.appex: ${err.message}`,
+    );
     fs.rmSync(appexDir, { recursive: true, force: true });
     return false;
   }
@@ -136,7 +150,7 @@ exports.default = async function afterPack(context) {
   const productName = packager.appInfo.productFilename;
   const appDir = path.join(appOutDir, `${productName}.app`);
   const contentsDir = path.join(appDir, "Contents");
-  const identity = process.env.CSC_NAME || process.env.APPLE_SIGNING_IDENTITY || "-";
+  const identity = "-";
   const timestampFlag = identity === "-" ? "" : " --timestamp";
 
   // Copy Assets.car into the app bundle if generate-icon.sh produced one.
@@ -157,6 +171,13 @@ exports.default = async function afterPack(context) {
   const swiftTarget = SWIFTC_TARGETS[context.arch] || "arm64-apple-macosx15.0";
 
   for (const ext of QL_EXTENSIONS) {
-    buildQLExtension(ext, plugInsDir, appBundleId, identity, timestampFlag, swiftTarget);
+    buildQLExtension(
+      ext,
+      plugInsDir,
+      appBundleId,
+      identity,
+      timestampFlag,
+      swiftTarget,
+    );
   }
 };

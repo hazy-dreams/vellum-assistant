@@ -15,3 +15,5 @@ resources/.vellum-mac-helper*.Info.plist
 resources/.vellum-mac-helper.bundle-name
 resources/Vellum Helper*.app
 resources/notifier
+
+dist-private/

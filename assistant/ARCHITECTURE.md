@@ -2,6 +2,17 @@
 
 This document owns assistant-runtime architecture details. The repo-level architecture index lives in [`/ARCHITECTURE.md`](../ARCHITECTURE.md).
 
+### Claude subscription profiles
+
+The `claude-agent-sdk` provider selects an SDK-owned agent loop through the
+ordinary model/profile resolver. Vellum retains its canonical conversation,
+executor, permissions and client-event boundaries; tool-free auxiliary jobs use
+the same SDK provider through existing routing and retry conventions. The profile
+picker uses explicit no-prompt SDK model discovery; saved SDK-owned model IDs
+remain valid independently of the offline catalog. See
+[Claude subscription runtime](docs/claude-subscription.md) for authentication,
+resume, hook boundaries, testing and third-party licensing.
+
 ### Channel Onboarding Playbook Bootstrap
 
 - Transport metadata arrives via `conversation_create.transport` (HTTP) or `/channels/inbound` (`channelId`, optional `hints`, optional `uxBrief`).

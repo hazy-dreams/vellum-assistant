@@ -13,6 +13,7 @@ import {
 } from "@/generated/daemon/@tanstack/react-query.gen";
 import { inferenceProviderconnectionsByNameDelete } from "@/generated/daemon/sdk.gen";
 import type { ProviderConnection } from "@/generated/daemon/types.gen";
+import { badRequestMessage } from "@/utils/api-errors";
 import { captureError } from "@/lib/sentry/capture-error";
 
 export interface ProviderActions {
@@ -50,8 +51,13 @@ export function useProviderActions(
       });
     },
     onError: (error) => {
-      captureError(error, { context: "settings-ai-set-default-provider" });
-      toast.error(t("settings:useProviderActions.setDefaultFailedToast"));
+      const message = badRequestMessage(error);
+      toast.error(
+        message ?? t("settings:useProviderActions.setDefaultFailedToast"),
+      );
+      if (!message) {
+        captureError(error, { context: "settings-ai-set-default-provider" });
+      }
     },
   });
 

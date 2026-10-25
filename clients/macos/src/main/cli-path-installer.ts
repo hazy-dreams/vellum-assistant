@@ -8,6 +8,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { PRIVATE_CANDIDATE } from "./private-candidate";
 import {
   ensureCliInstalled,
   getCliLocatorPath,
@@ -96,6 +97,8 @@ export function readWrapperOwnership(): WrapperOwnership {
 export function installWrapper(opts: {
   overwriteForeign: boolean;
 }): "installed" | "needs-overwrite-confirmation" {
+  if (PRIVATE_CANDIDATE)
+    throw new Error("Private builds do not manage the shared shell wrapper");
   if (readWrapperOwnership() === "foreign" && !opts.overwriteForeign) {
     return "needs-overwrite-confirmation";
   }
@@ -112,6 +115,7 @@ export function installWrapper(opts: {
  * keep the lazy install path. Returns whether provisioning ran.
  */
 export async function provisionCliForWrapper(): Promise<boolean> {
+  if (PRIVATE_CANDIDATE) return false;
   if (readWrapperOwnership() !== "ours") return false;
   await ensureCliInstalled();
   return true;
@@ -162,7 +166,8 @@ export async function getCliPathInstallState(): Promise<CliPathInstallState> {
   const [firstHit] = findExecutablesInPath("vellum", shellPath);
   const firstHitIsWrapper =
     firstHit !== undefined &&
-    (firstHit === wrapperPath || realpathOr(firstHit) === realpathOr(wrapperPath));
+    (firstHit === wrapperPath ||
+      realpathOr(firstHit) === realpathOr(wrapperPath));
 
   const inPath =
     firstHitIsWrapper || splitPathEntries(shellPath).includes(getWrapperDir());
@@ -175,6 +180,8 @@ export async function getCliPathInstallState(): Promise<CliPathInstallState> {
 
 /** Remove the wrapper, but only if it's one we installed. */
 export function uninstallWrapper(): "removed" | "not-ours" | "absent" {
+  if (PRIVATE_CANDIDATE)
+    throw new Error("Private builds do not manage the shared shell wrapper");
   const ownership = readWrapperOwnership();
   if (ownership === "absent") return "absent";
   if (ownership === "foreign") return "not-ours";

@@ -31,13 +31,13 @@ function assertNotifierArch(addon, packagedArch) {
   const expected = packagedArch ? NOTIFIER_SLICE[packagedArch] : undefined;
   if (!expected) {
     throw new Error(
-      `afterSign: cannot check ${addon.name} against packaged architecture "${packagedArch}"; the notifier addon supports ${Object.keys(NOTIFIER_SLICE).join(" and ")}`
+      `afterSign: cannot check ${addon.name} against packaged architecture "${packagedArch}"; the notifier addon supports ${Object.keys(NOTIFIER_SLICE).join(" and ")}`,
     );
   }
   const remedy = `Rebuild it with ELECTRON_TARGET_ARCH=${packagedArch} bash scripts/build-notifier.sh.`;
   if (!addon.name.startsWith(`notifier/${packagedArch}/`)) {
     throw new Error(
-      `afterSign: ${addon.name} is not under notifier/${packagedArch}/, so the runtime lookup by process.arch would miss it. ${remedy}`
+      `afterSign: ${addon.name} is not under notifier/${packagedArch}/, so the runtime lookup by process.arch would miss it. ${remedy}`,
     );
   }
   const slices = execFileSync("lipo", ["-archs", addon.path], {
@@ -47,7 +47,7 @@ function assertNotifierArch(addon, packagedArch) {
     .split(/\s+/);
   if (!slices.includes(expected)) {
     throw new Error(
-      `afterSign: ${addon.name} is built for ${slices.join(", ")}, but this build packages ${packagedArch}. ${remedy}`
+      `afterSign: ${addon.name} is built for ${slices.join(", ")}, but this build packages ${packagedArch}. ${remedy}`,
     );
   }
 }
@@ -57,7 +57,9 @@ function getConfiguredQualifier(options) {
     return options.identity;
   }
 
-  return process.env.CSC_NAME || process.env.APPLE_SIGNING_IDENTITY || undefined;
+  return (
+    process.env.CSC_NAME || process.env.APPLE_SIGNING_IDENTITY || undefined
+  );
 }
 
 function getCertificateTypes(isDevelopment) {
@@ -70,6 +72,8 @@ async function resolveSigningIdentity(context) {
   const { arch, packager } = context;
   const options = packager.platformSpecificBuildOptions || {};
   const qualifier = getConfiguredQualifier(options);
+
+  if (qualifier === "-") return { name: "-", sign: "-", keychainFile: null };
 
   if (qualifier === null) {
     console.warn("afterSign: mac.identity is null, skipping nested re-signing");
@@ -106,7 +110,7 @@ async function resolveSigningIdentity(context) {
 
   if (identity == null) {
     throw new Error(
-      "afterSign: unable to resolve the macOS signing identity that electron-builder used"
+      "afterSign: unable to resolve the macOS signing identity that electron-builder used",
     );
   }
 
@@ -223,19 +227,19 @@ exports.default = async function afterSign(context) {
   for (const executable of executables) {
     if (!fs.existsSync(executable.path)) {
       console.warn(
-        `afterSign: ${executable.name} not found at ${executable.path}, skipping codesign`
+        `afterSign: ${executable.name} not found at ${executable.path}, skipping codesign`,
       );
       continue;
     }
 
     console.log(
-      `afterSign: codesigning ${executable.name} with identity="${identity.name}"`
+      `afterSign: codesigning ${executable.name} with identity="${identity.name}"`,
     );
     codesign(executable.path, executable.entitlements, identity);
   }
 
   console.log(
-    `afterSign: re-signing ${productName}.app with identity="${identity.name}"`
+    `afterSign: re-signing ${productName}.app with identity="${identity.name}"`,
   );
   // Read back the decision electron-builder.config.cjs already made, rather
   // than re-reading the environment: only a build configured with a

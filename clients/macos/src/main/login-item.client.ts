@@ -1,25 +1,14 @@
-import {
-  configureLoginItem,
-  installLoginItem,
-  installLoginItemIpc,
-} from "@vellumai/electron-desktop/login-item";
-import {
-  onSettingChange,
-  readSetting,
-  writeSetting,
-} from "@vellumai/electron-desktop/settings";
-
+import { app } from "electron";
+import { z } from "zod";
 import { handle } from "./ipc";
-
-configureLoginItem({
-  handle,
-  store: {
-    read: () => readSetting("launchAtLogin"),
-    subscribe: (listener) => onSettingChange("launchAtLogin", listener),
-    write: (enabled) => {
-      writeSetting("launchAtLogin", enabled);
-    },
-  },
-});
-
-export { installLoginItem, installLoginItemIpc };
+export const installLoginItem = (): void => {};
+export const installLoginItemIpc = (): void => {
+  handle(
+    "vellum:launchAtLogin:get",
+    z.tuple([]),
+    () => app.getLoginItemSettings().openAtLogin,
+  );
+  handle("vellum:launchAtLogin:set", z.tuple([z.boolean()]), () => {
+    throw new Error("Manage login items after private installation");
+  });
+};

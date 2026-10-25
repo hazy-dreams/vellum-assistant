@@ -1365,6 +1365,7 @@
       }
     },
     "allModelsLink": "Все модели ({count})",
-    "allModelsList": "Все модели"
+    "allModelsList": "Все модели",
+    "claudeSubscriptionHint": "Подписка Claude · Локальный Claude Code"
   }
 }

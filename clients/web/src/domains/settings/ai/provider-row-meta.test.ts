@@ -89,3 +89,13 @@ describe("providerRowMeta ollama endpoint", () => {
     ).toBe(`192.168.1.50:11434  •  ${total} models  •  No API key needed`);
   });
 });
+
+test("Claude subscription can be default and identifies local subscription auth", () => {
+  expect(isDefaultProviderId("claude-agent-sdk")).toBe(true);
+  expect(
+    providerRowMeta({
+      ...connection({ type: "none" }),
+      provider: "claude-agent-sdk",
+    }),
+  ).toBe("Claude subscription · Local Claude Code sign-in");
+});

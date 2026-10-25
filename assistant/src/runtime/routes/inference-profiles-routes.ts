@@ -9,8 +9,8 @@
  *
  * Unlike the generic `config set llm.profiles.<name> '<json>'` path, these
  * routes validate at write time: the provider must be a known `LLMProvider`,
- * the model must be in the catalog (unless `allowUnlisted`), a referenced
- * connection must exist, and the resulting profile must be able to dispatch
+ * the model must be in the catalog (unless `allowUnlisted` or SDK-owned), a
+ * referenced connection must exist, and the resulting profile must be able to dispatch
  * (unless `allowUnavailable`). Writes reuse the shared config-write plumbing
  * (`commitConfigWrite` + the managed-profile guards), so a CLI-created profile
  * is completed/materialized identically to a UI-created one.
@@ -215,6 +215,12 @@ function modelReachIssue(
   }
   const entryKind = resolveEntryProviderKind(provider, model);
   const catalogProvider = entryKind ?? provider;
+  // Like delegated-agent model IDs, Claude SDK aliases and version IDs belong
+  // to the installed runtime. A discovery snapshot is guidance, not an offline
+  // validity whitelist, and must not invalidate saved profiles after restart.
+  if (catalogProvider === "claude-agent-sdk") {
+    return null;
+  }
   if (isModelInCatalog(catalogProvider, model)) {
     return null;
   }
@@ -971,7 +977,7 @@ export const ROUTES: RouteDefinition[] = [
     },
     summary: "Create an inference profile",
     description:
-      "Create a validated custom profile. The provider must be a known LLM provider, the model must be in the catalog (unless allowUnlisted), a referenced connection must exist, and the profile must be able to dispatch — a valid provider id with no credentialed connection behind it is rejected unless allowUnavailable is set, in which case it is created with a warning.",
+      "Create a validated custom profile. The provider must be a known LLM provider, the model must be in the catalog (unless allowUnlisted or owned by the Claude SDK runtime), a referenced connection must exist, and the profile must be able to dispatch. A valid provider id with no credentialed connection behind it is rejected unless allowUnavailable is set, in which case it is created with a warning.",
     tags: ["inference"],
     requestBody: createRequestSchema,
     responseBody: profileWriteResultSchema,

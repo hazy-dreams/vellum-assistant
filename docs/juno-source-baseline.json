@@ -1,0 +1,431 @@
+{
+  "schemaVersion": 1,
+  "upstreamCommit": "146e228b4c8e9111b3c255f0b9c7a82fe2c0cd45",
+  "description": "Reconciled integration source baseline. Hashes cover these source files only, not dependencies, configuration, native transcripts, generated resources, or historical installed app bytes. Private desktop build configuration is normalized separately.",
+  "files": [
+    {
+      "path": "assistant/ARCHITECTURE.md",
+      "sha256": "5bb6f5cfb0ea83dcc51cdc8a8b9c6a3dc2ea93813fe52abe20b5d3dc3fc8fe02"
+    },
+    {
+      "path": "assistant/openapi.yaml",
+      "sha256": "1ed90afc5ff0811924306c74bca9381940b65075df25d9e4bba24831afb9ccd1"
+    },
+    {
+      "path": "assistant/package.json",
+      "sha256": "26cdf203c452f6b51898aa306b2a5b448596085da9ec8072881b5ebc443ea681"
+    },
+    {
+      "path": "assistant/src/__tests__/conversation-agent-loop-handlers-usage.test.ts",
+      "sha256": "6ffa750e4da00e63da10254828b6b09f704c0884fe37a466a592f31e705c73be"
+    },
+    {
+      "path": "assistant/src/__tests__/openai-responses-prompt-cache.test.ts",
+      "sha256": "f09daa66a284e4764269dbff4bebb195ce40c21935a3221486ac9dd58313410a"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/auth.test.ts",
+      "sha256": "ebfc4793770012ddef7fe440436203db4b12f7250ec3c9ad31d9b95cf4933b37"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/auth.ts",
+      "sha256": "b87494f0f4d6f150ffe22608a4c33340fec7dd6d402d0f0c45cf2841f753f40b"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/inference-options.test.ts",
+      "sha256": "ea3ec540083040037d27a00772bf79b7ffef48d8c30ad2f04e89c850b0c53dbc"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/inference-options.ts",
+      "sha256": "5a3b0538514091833ddc21e0f4fa3b528887f0d56f72f2f625cab9a37ec9277f"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/models.test.ts",
+      "sha256": "d5d71078e2e19644d890b298b5ecda75794981c1b9f4df39a21be5caeb3853d5"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/models.ts",
+      "sha256": "e57e9a73d4d586b272a9cb0c196158b520347b8dcd1f9045f17695adad11ad75"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/runtime-regressions.test.ts",
+      "sha256": "d22fa7ac734b6140874e1153cd943b446d756528f427734aec0f31b349aeaf0d"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/runtime.test.ts",
+      "sha256": "3b771d1ff566231cc6028c8dbd7e59605e244e33a46c3f78e8f39bcef7d5aad6"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/runtime.ts",
+      "sha256": "b146da843f8868ba083e0b771b25443bfb6a7647b767850c02e25cfaa497c28a"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/session.test.ts",
+      "sha256": "20de85c334f09ff8f6cc365b978324a7595ff5c7456f9624e4ad9bd5eae8eee7"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/session.ts",
+      "sha256": "5588b478026d6137d1974231f74502dbee9efcea26e270df0cd1c6e25756c9e1"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/timeout.test.ts",
+      "sha256": "32e2c7e71b7f9da135dac8487d81958fc94e4cfb09d43fb2d8259a315ab12931"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/timeout.ts",
+      "sha256": "857697988b1df73247cca066724ba6243ae9c0a41699fa5e47482aaa8017ec58"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/tools.test.ts",
+      "sha256": "020d7c95695ecebc00eef400679bec4fcabff98c1174ad72c80efa289cd62526"
+    },
+    {
+      "path": "assistant/src/agent/claude-sdk/tools.ts",
+      "sha256": "dd26e039892ce5a5b13acc5f8fb934a9c3d6d55800d986a1ee58ab626c598802"
+    },
+    {
+      "path": "assistant/src/agent/loop-claude-sdk.test.ts",
+      "sha256": "d8de82365514bcc96f1d9b06153158914fb33ca5e184a1a3f648123183b9dd0e"
+    },
+    {
+      "path": "assistant/src/agent/loop.ts",
+      "sha256": "8dfb0b00a7d9d24cda6bd939a6dcf5a76ed0d7542c2ee0d95b8152a25f2ff6a6"
+    },
+    {
+      "path": "assistant/src/agent/user-message-outcome.ts",
+      "sha256": "0ba10cda4115ff8d885222c2bec1480f529ccf4661e661e8f6616eaa923794e5"
+    },
+    {
+      "path": "assistant/src/config/default-profile-names.ts",
+      "sha256": "d0a38aa70693deb6ebcc6f83287fad289737dc5f933957a6d90154f2bf0b5f45"
+    },
+    {
+      "path": "assistant/src/config/schemas/llm.ts",
+      "sha256": "2ebedda1dca39f875c9e1d392203493d1592c1baf25f90bac8c79f733f6cbc06"
+    },
+    {
+      "path": "assistant/src/daemon/conversation-agent-loop-handlers.ts",
+      "sha256": "f3236980c462352c4dca8e385649ef904d8a5b2a24b8948d696a528f760a1501"
+    },
+    {
+      "path": "assistant/src/providers/__tests__/connection-model-compat.test.ts",
+      "sha256": "d90e2ad76a8f7c09b20de1f29561c7007c3ae0241b0fea8daa6ab7645282b3db"
+    },
+    {
+      "path": "assistant/src/providers/claude-agent-sdk/client.test.ts",
+      "sha256": "c29cd5418aa2244dbbef77674462c7dc64433a6903bb0329baef9ca2d28cc8ad"
+    },
+    {
+      "path": "assistant/src/providers/claude-agent-sdk/client.ts",
+      "sha256": "3aac7a33a0a14ecc6bb912d523a60f5cfd7831ef593539b34fababca4a7bda67"
+    },
+    {
+      "path": "assistant/src/providers/claude-agent-sdk/fallback.test.ts",
+      "sha256": "79550580dd200535461bc74d5edf097120ecd26876f9e07a693bacda620d196a"
+    },
+    {
+      "path": "assistant/src/providers/claude-agent-sdk/registration.test.ts",
+      "sha256": "bdfb8c569ad2d5c2b225237c2718b959f17c4231167f3bcfce78cb669878501f"
+    },
+    {
+      "path": "assistant/src/providers/claude-agent-sdk/routing.test.ts",
+      "sha256": "bef67b09fd91d500de0d829dc63518bee167f945cfe4485a4bbdc5bf076836c9"
+    },
+    {
+      "path": "assistant/src/providers/inference/adapter-factory.ts",
+      "sha256": "7a35094221c5c6969ac59ecaf263bd258007463c1693ac5cd827a0973e7a7f5c"
+    },
+    {
+      "path": "assistant/src/providers/inference/backfill.ts",
+      "sha256": "59d0a1c3261a642bb2c0514bb6638d4b1285e96788060257c1c433d3f5fd8fa6"
+    },
+    {
+      "path": "assistant/src/providers/model-catalog.ts",
+      "sha256": "6c3901e8a387059f0814fb8f5bdd099bfa5d666fa24c081ce751cb2580e52201"
+    },
+    {
+      "path": "assistant/src/providers/model-intents.ts",
+      "sha256": "7348410bd40023eda0966d19eda126f8bc0a9dd459ea8226c87257541e718867"
+    },
+    {
+      "path": "assistant/src/providers/openai/codex-models.ts",
+      "sha256": "ea21c1f9dcda76f90e1618d07f9339e3bd91c09e920d688715d2704675d5a3ee"
+    },
+    {
+      "path": "assistant/src/providers/provider-availability.ts",
+      "sha256": "b392ec95d8cd7a032a8dd5f07ea33af2e969c01e877fe3e99006baeaab94107a"
+    },
+    {
+      "path": "assistant/src/providers/provider-secret-catalog.ts",
+      "sha256": "c397920f4d266dabc5e7e0776fcbdf5bbca86685ee1922d8be483d151454fe11"
+    },
+    {
+      "path": "assistant/src/providers/provider-send-message.ts",
+      "sha256": "68e8999b2d1c01ae4df3128565f85c2d4f93942907129b854724b76e8d7d974c"
+    },
+    {
+      "path": "assistant/src/providers/registry.ts",
+      "sha256": "9f05897e78aeb140521834b39a1910b326557621edacbfe957f3f43ca72c5b10"
+    },
+    {
+      "path": "assistant/src/providers/retry.ts",
+      "sha256": "cb209723017235f79a860d234094f743bd5bb75f49633630d4fae641cf6ab552"
+    },
+    {
+      "path": "assistant/src/runtime/__tests__/agent-wake.test.ts",
+      "sha256": "0b08f5446499fa5c3c3decfc06104c00129d0fc0dd0995bb4e29a23029e8eafe"
+    },
+    {
+      "path": "assistant/src/runtime/agent-wake.ts",
+      "sha256": "61b75ab689d9b29362f10e1b9da5943485f506b006b7352f67714015ed372a52"
+    },
+    {
+      "path": "assistant/src/runtime/routes/__tests__/inference-models-routes.test.ts",
+      "sha256": "03f4781cdfea693aee9c7eed80bf3c791b9410dd19ac6e70f6672676bbfe032c"
+    },
+    {
+      "path": "assistant/src/runtime/routes/__tests__/inference-profiles-routes.test.ts",
+      "sha256": "ed94dabda0dbe82fafba5cbab2277dcbfa30e25b3b9040f8c745c905249abb01"
+    },
+    {
+      "path": "assistant/src/runtime/routes/conversation-query-routes.ts",
+      "sha256": "024674458f83e3051a2cb6d094e63064717a17ae58184a955626e193faa9a442"
+    },
+    {
+      "path": "assistant/src/runtime/routes/identity-routes.ts",
+      "sha256": "c5c6b1f9c89188c00fea170ba9457375a4b9694f9c77da1f97b29eaea80bbde5"
+    },
+    {
+      "path": "assistant/src/runtime/routes/inference-models-routes.ts",
+      "sha256": "ab5bc23d24c50f6b51c6a46f9515ae5c0b5fbadece87a7606f3e5aab19045c20"
+    },
+    {
+      "path": "assistant/src/runtime/routes/inference-profiles-routes.ts",
+      "sha256": "56b0078bed9bfe7aca5fddc858bb666e8d861e92f197b00471722458d09c8490"
+    },
+    {
+      "path": "assistant/src/workflows/leaf-runner.ts",
+      "sha256": "6ee40d1d039d690a89a6530d48a51c2bec68ed1df98738fca5c1c0325070fc78"
+    },
+    {
+      "path": "bun.lock",
+      "sha256": "0b6ff171cae6c8b83ca23f88674aa324153b4f40f1e19e6d0a0245247e72408a"
+    },
+    {
+      "path": "clients/web/docs/CLAUDE_SUBSCRIPTION.md",
+      "sha256": "f4ba3867b10025470fa4b4806029e2616437fcaf40bf0cef330937c6103862ce"
+    },
+    {
+      "path": "clients/web/src/assistant/llm-model-catalog.test.ts",
+      "sha256": "bbdcc42391634c5d3344b5b585a453eea30ca0c5ffa26f7777154e8c69e0c80a"
+    },
+    {
+      "path": "clients/web/src/assistant/llm-model-catalog.ts",
+      "sha256": "a7a29caaa2cc7c3126dfebcae6784a90c786fcb22530bc38a767f3fa2f533c5b"
+    },
+    {
+      "path": "clients/web/src/domains/chat/utils/composer-configuration.test.ts",
+      "sha256": "d1c091b4cb7e6eeb6afd9bf37a853f9906efe357074eb239e5513971edfa6513"
+    },
+    {
+      "path": "clients/web/src/domains/chat/utils/composer-configuration.ts",
+      "sha256": "a2f5f321d2226febef7ea2ddfe202167d715dbf4b79df75322543c93a2f948c8"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-agent-sdk-provider.test.tsx",
+      "sha256": "0abc831e6eaa0be40e8ddea260b47c093932282622225494ad0e394c2f7206f9"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-agent-sdk-settings.test.tsx",
+      "sha256": "7b7d9e7d74aefcc8b2b91ce294fc55d59507580393e793226f897fca4abfe740"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-agent-sdk-settings.tsx",
+      "sha256": "aaf94c1f7862d0fa96571f134e6d5523ac127b3b48b1d2c387a5129b42e56dd9"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-model-discovery-status.tsx",
+      "sha256": "e9984f978476e7458611df83e6741013d193c896258d243fab135a9234944b44"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-model-options.ts",
+      "sha256": "ae49c3c2141b483c105ed6b6e96c4954b36e95daa308f5521a7d2e21d89be2e6"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/claude-model-profiles.test.tsx",
+      "sha256": "219f465a67834d7b780a036dd32358f8e17c2cdad3c46192411b952462049ec8"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/constants.ts",
+      "sha256": "02eef7f91600c605f4e613a710aad9dff41a489969f4a1af1d70fd94c02e35ef"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/model-first-candidates.test.ts",
+      "sha256": "f5dba5d7d6eddd52252fec9bb9d59312f0c59ec80d33562bd824714c26bff2e6"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/model-first-candidates.ts",
+      "sha256": "b2b70215de04a031a7e3dcd2a86d54cf2dbd95053dda81cecf4a7863968ca17b"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/model-first-groups.test.ts",
+      "sha256": "c8a8aeef7695290a3781859b302bfbd5893f78f68451de7235efb9e8e02da29d"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-advanced-params.tsx",
+      "sha256": "151c2cae40e4f499ba3d1fa36cc5b53155fa0f99ea0aa3de28ee76d4e74cadc6"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-create-model-first.tsx",
+      "sha256": "0d8284e3414a6ef375fe8e8328394dfc06dfa9416952014fdc86b8c1c710514e"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-editor-fields.tsx",
+      "sha256": "92e4fc4ffdf37188373e6bba980b474ceff220578560bec8183e5c7255403b91"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-editor-modal.test.tsx",
+      "sha256": "8234d5b395992e850ecfa6e52dfa2ebc50b847578640789ca3150b5cdd2c6a38"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-editor-provider-section.test.tsx",
+      "sha256": "945fb38e86f00fd1e5fe453c49a6c66a47c57222e3eb7866896d30d40f38bb05"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-editor-provider-section.tsx",
+      "sha256": "74b9684ef682f2339aeb8a423b9dc139cb219becbf6e6d4eac40e09fb8e2ea1b"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-param-visibility.test.ts",
+      "sha256": "1de29072b0fa146b03580872279ee1d88285a16f3c7bdd9a18f57bf823e49f6a"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-param-visibility.ts",
+      "sha256": "612157fbb73ab5c9fa2769d42b1ceef6371e08a08cc18c8e6ce7c5dd3ef7dd0f"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/profile-pickers.test.ts",
+      "sha256": "c1b768352a103ea7ab5ffaa7761d0e7f054a126cea9a38f49ef17bcb426afa5b"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-availability.ts",
+      "sha256": "6c8894bb024805ec889c2c22d6d2159d1f9c61034c4cfafba616385c2961ce7a"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-create-form.tsx",
+      "sha256": "5187a8f7e0d4cfae9605f3df50516143b817b8125f9b27b4f66d95255bd96aab"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-detail-panel.stories.tsx",
+      "sha256": "156e606bab7f26ffabf3f582059ecdec4f2208f589fb3baaf47f7a508a103695"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-editor-constants.ts",
+      "sha256": "af4caa16035c2fb8fb9e6165a40c9e0b59871ca3e81c886170c7f90a02f4b759"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-editor-content.tsx",
+      "sha256": "ecda83f1cd7cbdb49bfcc9edde0df35ea389d7477b414044ef0bb09716d9d3ec"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-row-meta.test.ts",
+      "sha256": "56d8caac23c8b050229a200473ccc9bec9bd8f7f11c338943d77507649b089eb"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-row-meta.ts",
+      "sha256": "637d65ea9345cc69b7cbc15dcb2c356ba105e55153aa35b3551701a8f0cb60a8"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/provider-row.tsx",
+      "sha256": "ebc5922a9610c62558b686cba14ee027f5e2e62a3b83bdb691c6d771b0d76a99"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/providers-section.test.tsx",
+      "sha256": "ea7a6e21a6ead15c9b721a2a2d2370a5e9e959e5744831c65d9691282652855b"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-claude-agent-sdk-settings.test.tsx",
+      "sha256": "21c660ed711a64bdf7adaae02b60a791be8ed77bda97a6fb228e67d14d22c05d"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-claude-agent-sdk-settings.ts",
+      "sha256": "3ffcfe5ca7ad591b3149904e5ebfa59a5ca2093d1088d4d7054fb230b6cddf6c"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-claude-models.test.tsx",
+      "sha256": "329276026070384dfed9d409a8be0ee183f8b634321a3513b87d98eeb34417c9"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-claude-models.ts",
+      "sha256": "d33f00d3375b17d99eda2b1bcf1809602a0da1a20c6965e602e216e9d70c3a05"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-profile-editor.ts",
+      "sha256": "9f7e3743bd46e70ae41431a2f56b2bad05914a6d7b4a03a522fc32249ee2471a"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-profile-save-claude-sdk.test.tsx",
+      "sha256": "52aab5f9516db280437dbe58c488ee6425189709273563ceec3d8dbad6eee264"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-profile-save.ts",
+      "sha256": "9ae993ddb57c9eb95a68beaa4c595b46ffda9590b7f3998a029a2f4d549bf703"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/use-provider-actions.ts",
+      "sha256": "dc9bf2800c8a4c518ccb4ed6f431491317217422668f1ef3ece05502a29fd9f2"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/utils.test.ts",
+      "sha256": "5a6fb0403a24a0330d25bc6ef651e5eeb9b5731620ae772db79f32cd4a12a072"
+    },
+    {
+      "path": "clients/web/src/domains/settings/ai/utils.ts",
+      "sha256": "c6b53bd40cfefd1d10482bf0ca51edfac78b35f3d78bafdc5eac314e7011c9c0"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/en/chat.json",
+      "sha256": "e75af0843daa987584d193fa56705634b3dcf73a53103aa570fe2964bbebd270"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/en/settings.json",
+      "sha256": "77a658e692c53e70b9628a704f83a1428bcde7ba87a54f9f366d30692fe7c00a"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/es/chat.json",
+      "sha256": "9b05432a4e019137d84903c8fd3eafb3aa6429559ca0ab5aad0db2ecf3f1323b"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/es/settings.json",
+      "sha256": "e2f8e2fdb0301ac4f72a98bb3a19157fca184c5dd9177e032acf70f50a32779d"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/ru/chat.json",
+      "sha256": "d388d6e2b70cc50eb87b47370a1e822cc9eb1ecaf90fc97c4ca9425298c192b4"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/ru/settings.json",
+      "sha256": "8449f26f58eb89171915750f3137d6cc27aa78299aa3b2be7ec8cd02b3bff319"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/zh-TW/chat.json",
+      "sha256": "7f4181b2cfcaf2f5d6bd9acb8f268b6137661917e857365fff572aab22cc686c"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/zh-TW/settings.json",
+      "sha256": "4effb0f69b4cfece6571e92a1d7808a3a17b123923b9dae40cf29ea850992199"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/zh/chat.json",
+      "sha256": "16921f972bd431cbc3f0721ba7294a0a50df1c2c1931021c2dd1c81264fd23e0"
+    },
+    {
+      "path": "clients/web/src/i18n/locales/zh/settings.json",
+      "sha256": "4d722b9af3fdd7de3f77fd4a70243041555d1bd0d74f0a3489324f871a90eb1f"
+    },
+    {
+      "path": "meta/llm-provider-catalog.json",
+      "sha256": "c4fa85d2c6b4bde746649a87634a2820f1e7576af0e2468aa81a7c19e06955d8"
+    }
+  ]
+}

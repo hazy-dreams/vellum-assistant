@@ -78,6 +78,7 @@ interface ProfileAdvancedParamsProps {
   onMaxTokensChange: (v: number | null) => void;
   contextWindowMaxInputTokens: number | null;
   onContextWindowChange: (v: number | null) => void;
+  effortOptions?: readonly (typeof EFFORT_OPTIONS)[number][];
   effort: (typeof EFFORT_OPTIONS)[number];
   onEffortChange: (v: (typeof EFFORT_OPTIONS)[number]) => void;
   speed: (typeof SPEED_OPTIONS)[number];
@@ -259,6 +260,7 @@ export function ProfileAdvancedParams({
   contextWindowMaxInputTokens,
   onContextWindowChange,
   effort,
+  effortOptions = EFFORT_OPTIONS,
   onEffortChange,
   speed,
   onSpeedChange,
@@ -336,7 +338,10 @@ export function ProfileAdvancedParams({
             {t("profileAdvancedParams.effortLabel")}
           </label>
           <SegmentControl
-            items={EFFORT_OPTIONS.map((v) => ({
+            items={(effortOptions.includes(effort)
+              ? effortOptions
+              : [...effortOptions, effort]
+            ).map((v) => ({
               value: v,
               // "inherit" is a wire sentinel; post-M6 the saved profile bakes
               // the current default, so the UI says "default", not "inherit".
@@ -344,7 +349,7 @@ export function ProfileAdvancedParams({
                 v === "inherit"
                   ? t("profileAdvancedParams.effortSegmentDefault")
                   : v,
-              disabled: isReadOnly,
+              disabled: isReadOnly || !effortOptions.includes(v),
             }))}
             value={effort}
             onChange={(v) => onEffortChange(v)}

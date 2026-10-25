@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
+// Exercise the inherited public path; private guards have separate coverage.
+mock.module("./private-candidate", () => ({
+  PRIVATE_CANDIDATE: false,
+  PRIVATE_CLI_ENTRY: "",
+}));
+
 import { FakeChild } from "./test-helpers";
 
 // --- Mocks ---

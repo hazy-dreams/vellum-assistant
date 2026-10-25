@@ -10,6 +10,9 @@ import { Modal } from "@vellumai/design-library/components/modal";
 import { toast } from "@vellumai/design-library/components/toast";
 import { Typography } from "@vellumai/design-library/components/typography";
 
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
+import { ClaudeAgentSdkSettings } from "@/domains/settings/ai/claude-agent-sdk-settings";
+import { useClaudeAgentSdkSettings } from "@/domains/settings/ai/use-claude-agent-sdk-settings";
 import { Trans, useTranslation } from "@/i18n";
 import {
   credentialPresenceQueryKey,
@@ -161,6 +164,8 @@ export function ProviderCreateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isClaudeAgentSdk = provider === CLAUDE_AGENT_SDK_PROVIDER;
+  const sdkSettings = useClaudeAgentSdkSettings(assistantId, isClaudeAgentSdk);
   const isOpenAICompatible = provider === "openai-compatible";
   const allowsCustomBaseUrl = providerAllowsCustomBaseUrl(provider);
   const persistsConnectionModels = providerPersistsConnectionModels(provider);
@@ -210,7 +215,7 @@ export function ProviderCreateForm({
   // --- Available credentials list ---
   const { credentials: availableCredentials } = useProviderCredentialsList({
     assistantId,
-    enabled: true,
+    enabled: authType === "api_key",
   });
 
   // A custom provider must not take a built-in provider's name or another
@@ -222,7 +227,8 @@ export function ProviderCreateForm({
   const canSave =
     name.trim().length > 0 &&
     (!isOpenAICompatible || label.trim().length > 0) &&
-    nameConflict === null;
+    nameConflict === null &&
+    sdkSettings.canSave;
 
   async function handleSave() {
     if (!canSave) {
@@ -231,6 +237,7 @@ export function ProviderCreateForm({
     setSaving(true);
     setError(null);
     try {
+      await sdkSettings.savePath();
       let auth: Auth;
 
       if (authType === "api_key") {
@@ -340,8 +347,12 @@ export function ProviderCreateForm({
       toast.success(t("providerCreateForm.providerConnectedToast"));
       warnOnFailedEndpointCheck(created, t);
       onCreated(created);
-    } catch {
-      setError(t("providerCreateForm.failedSaveProvider"));
+    } catch (cause) {
+      setError(
+        isClaudeAgentSdk && cause instanceof Error
+          ? cause.message
+          : t("providerCreateForm.failedSaveProvider"),
+      );
     } finally {
       setSaving(false);
     }
@@ -378,9 +389,7 @@ export function ProviderCreateForm({
               i18nKey="providerCreateForm.displayNameLabel"
               ns="settings"
               components={{
-                optional: (
-                  <span className="text-[var(--content-disabled)]" />
-                ),
+                optional: <span className="text-[var(--content-disabled)]" />,
               }}
             />
           </label>
@@ -551,6 +560,16 @@ export function ProviderCreateForm({
             {t("providerCreateForm.modelsHint")}
           </Typography>
         </div>
+      )}
+
+      {isClaudeAgentSdk && (
+        <ClaudeAgentSdkSettings
+          executablePath={sdkSettings.executablePath}
+          onExecutablePathChange={sdkSettings.onExecutablePathChange}
+          error={sdkSettings.error}
+          onRetry={sdkSettings.onRetry}
+          disabled={sdkSettings.isLoading || saving}
+        />
       )}
 
       {/* API Key + Advanced disclosure — only shown for key-based providers */}

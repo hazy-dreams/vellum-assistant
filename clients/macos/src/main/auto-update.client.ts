@@ -1,31 +1,14 @@
-import { autoUpdater } from "electron-updater";
-
-import {
-  configureAutoUpdate,
-  resolveUpdateFeedUrl,
-} from "@vellumai/electron-desktop/auto-update";
-
+import { z } from "zod";
 import { handle } from "./ipc";
-import log from "./logger";
-
-declare const __VELLUM_ENVIRONMENT__: string;
-
-const ENVIRONMENT: string =
-  typeof __VELLUM_ENVIRONMENT__ === "string"
-    ? __VELLUM_ENVIRONMENT__
-    : "production";
-
-configureAutoUpdate({
-  updater: autoUpdater,
-  ipc: { handle },
-  logger: log,
-  environment: ENVIRONMENT,
-  feedUrl: resolveUpdateFeedUrl(ENVIRONMENT, "mac-electron", process.arch),
-});
-
-export {
-  checkForUpdates,
-  installAutoUpdate,
-  type UpdateState,
-  type UpdateStatus,
+export type {
+  UpdateState,
+  UpdateStatus,
 } from "@vellumai/electron-desktop/auto-update";
+export const checkForUpdates = (): void => {};
+export const installAutoUpdate = (): void => {
+  handle("vellum:update:getState", z.tuple([]), () => ({
+    status: "idle" as const,
+  }));
+  handle("vellum:update:check", z.tuple([]), () => {});
+  handle("vellum:update:install", z.tuple([]), () => {});
+};

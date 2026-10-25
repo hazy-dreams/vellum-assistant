@@ -160,6 +160,7 @@ export function isFlagGatedProfileKey(value: string): boolean {
  * catalog imports types from `schemas/llm.ts`).
  */
 export const DEFAULT_PROFILE_PROVIDERS = [
+  "claude-agent-sdk",
   "anthropic",
   "openai",
   "gemini",

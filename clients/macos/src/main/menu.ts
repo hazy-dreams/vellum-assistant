@@ -12,6 +12,7 @@ import {
   readOnboardingActive,
 } from "@vellumai/electron-desktop/window-state";
 
+import { PRIVATE_CANDIDATE } from "./private-candidate";
 import { openAboutWindow } from "./about.client";
 import { checkForUpdates } from "./auto-update.client";
 import {
@@ -78,7 +79,7 @@ const cliPathFlowItem = (
 
 const cliPathItems = (): MenuItemConstructorOptions[] => {
   // Only packaged builds manage the shared ~/.local/bin/vellum wrapper.
-  if (!app.isPackaged) return [];
+  if (PRIVATE_CANDIDATE || !app.isPackaged) return [];
   const cliState = cliPathState;
   if (cliState?.kind === "installed" || cliState?.kind === "shadowed") {
     return [
@@ -154,7 +155,7 @@ const buildTemplate = (): MenuItemConstructorOptions[] => {
             openAboutWindow();
           },
         },
-        ...(!isDev
+        ...(!isDev && !PRIVATE_CANDIDATE
           ? [
               {
                 label: "Check for Updates\u2026",
@@ -232,9 +233,7 @@ const buildTemplate = (): MenuItemConstructorOptions[] => {
         { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
-        ...(chromeDevToolsEnabled
-          ? [{ role: "toggleDevTools" as const }]
-          : []),
+        ...(chromeDevToolsEnabled ? [{ role: "toggleDevTools" as const }] : []),
         { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
@@ -338,15 +337,11 @@ export const installApplicationMenu = (): void => {
   if (installed) return;
   installed = true;
 
-  handle(
-    "vellum:menu:setPlatformSession",
-    z.tuple([z.boolean()]),
-    ([has]) => {
-      if (state.hasPlatformSession === has) return;
-      state.hasPlatformSession = has;
-      applyMenu();
-    },
-  );
+  handle("vellum:menu:setPlatformSession", z.tuple([z.boolean()]), ([has]) => {
+    if (state.hasPlatformSession === has) return;
+    state.hasPlatformSession = has;
+    applyMenu();
+  });
 
   // Rebuild the menu when hotkey settings change so accelerators update
   // immediately without requiring an app restart.

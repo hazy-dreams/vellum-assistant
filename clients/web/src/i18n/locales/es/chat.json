@@ -2266,6 +2266,7 @@
       }
     },
     "allModelsLink": "Todos los modelos ({count})",
-    "allModelsList": "Todos los modelos"
+    "allModelsList": "Todos los modelos",
+    "claudeSubscriptionHint": "Suscripción de Claude · Usa Claude Code local"
   }
 }

@@ -6148,6 +6148,7 @@ paths:
                 provider:
                   type: string
                   enum:
+                    - claude-agent-sdk
                     - anthropic
                     - openai
                     - gemini
@@ -14614,6 +14615,10 @@ paths:
                         type: boolean
                       allAlerts:
                         type: boolean
+                      claudeAgentSdk:
+                        type: boolean
+                      claudeAgentSdkModelDiscovery:
+                        type: boolean
                     required:
                       - memoryOptOut
                       - retryLastTurn
@@ -14853,6 +14858,10 @@ paths:
                       composerSettings:
                         type: boolean
                       allAlerts:
+                        type: boolean
+                      claudeAgentSdk:
+                        type: boolean
+                      claudeAgentSdkModelDiscovery:
                         type: boolean
                     required:
                       - memoryOptOut
@@ -17120,9 +17129,9 @@ paths:
           schema:
             type: string
           description:
-            "Filter by provider id. One of: anthropic, openai, gemini, ollama, fireworks, together, openrouter,
-            vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet, poolside,
-            typesafe, vellum"
+            "Filter by provider id. One of: claude-agent-sdk, anthropic, openai, gemini, ollama, fireworks, together,
+            openrouter, vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet,
+            poolside, typesafe, vellum"
       responses:
         "200":
           description: Successful response
@@ -17140,6 +17149,91 @@ paths:
                 additionalProperties: false
         "400":
           description: Unknown provider filter
+  /v1/inference/models/discover:
+    post:
+      operationId: inference_models_discover_post
+      summary: Discover Claude subscription models
+      description:
+        Initialize the installed Claude Agent SDK to read its supported model choices without sending a generation
+        prompt. Refresh bypasses cached metadata; concurrent requests share initialization. Ordinary requests may reuse
+        a short-lived result. Availability and quotas are checked by Claude when a model is used.
+      tags:
+        - inference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                  const: claude-agent-sdk
+                refresh:
+                  type: boolean
+              required:
+                - provider
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        displayName:
+                          type: string
+                          minLength: 1
+                        description:
+                          type: string
+                        resolvedModel:
+                          type: string
+                          minLength: 1
+                        supportsEffort:
+                          type: boolean
+                        supportedEffortLevels:
+                          type: array
+                          items:
+                            type: string
+                            enum:
+                              - low
+                              - medium
+                              - high
+                              - xhigh
+                              - max
+                        supportsAdaptiveThinking:
+                          type: boolean
+                        supportsFastMode:
+                          type: boolean
+                        supportsAutoMode:
+                          type: boolean
+                        id:
+                          type: string
+                          minLength: 1
+                        provider:
+                          type: string
+                          const: claude-agent-sdk
+                      required:
+                        - displayName
+                        - description
+                        - id
+                        - provider
+                      additionalProperties: false
+                  fetchedAt:
+                    type: string
+                required:
+                  - models
+                  - fetchedAt
+                additionalProperties: false
+        "400":
+          description: Invalid discovery request
+        "424":
+          description: Claude setup, authentication, or model discovery failed
   /v1/inference/profiles:
     get:
       operationId: inference_profiles_get
@@ -17169,9 +17263,9 @@ paths:
       summary: Create an inference profile
       description:
         Create a validated custom profile. The provider must be a known LLM provider, the model must be in the
-        catalog (unless allowUnlisted), a referenced connection must exist, and the profile must be able to dispatch — a
-        valid provider id with no credentialed connection behind it is rejected unless allowUnavailable is set, in which
-        case it is created with a warning.
+        catalog (unless allowUnlisted or owned by the Claude SDK runtime), a referenced connection must exist, and the
+        profile must be able to dispatch. A valid provider id with no credentialed connection behind it is rejected
+        unless allowUnavailable is set, in which case it is created with a warning.
       tags:
         - inference
       requestBody:
@@ -17393,9 +17487,9 @@ paths:
           schema:
             type: string
           description:
-            "Filter by provider. One of: anthropic, openai, gemini, ollama, fireworks, together, openrouter,
-            vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet, poolside,
-            typesafe, vellum, chatgpt"
+            "Filter by provider. One of: claude-agent-sdk, anthropic, openai, gemini, ollama, fireworks, together,
+            openrouter, vercel-ai-gateway, litellm, opencode, openai-compatible, minimax, atlascloud, baseten, ionet,
+            poolside, typesafe, vellum, chatgpt"
       responses:
         "200":
           description: Successful response
@@ -39081,6 +39175,16 @@ components:
                         - type: "null"
                   additionalProperties: {}
                 - type: "null"
+            claudeAgentSdk:
+              anyOf:
+                - type: object
+                  properties:
+                    executablePath:
+                      anyOf:
+                        - type: string
+                          minLength: 1
+                        - type: "null"
+                - type: "null"
             profiles:
               type: object
               propertyNames:
@@ -39564,6 +39668,7 @@ components:
     ConnectionProvider:
       type: string
       enum:
+        - claude-agent-sdk
         - anthropic
         - openai
         - gemini
@@ -39838,6 +39943,7 @@ components:
                 provider:
                   type: string
                   enum:
+                    - claude-agent-sdk
                     - anthropic
                     - openai
                     - gemini
@@ -39857,6 +39963,15 @@ components:
                   minLength: 1
               required:
                 - provider
+              additionalProperties: false
+            claudeAgentSdk:
+              type: object
+              properties:
+                executablePath:
+                  anyOf:
+                    - type: string
+                      minLength: 1
+                    - type: "null"
               additionalProperties: false
             profiles:
               type: object
@@ -40227,6 +40342,7 @@ components:
           anyOf:
             - type: string
               enum:
+                - claude-agent-sdk
                 - anthropic
                 - openai
                 - gemini

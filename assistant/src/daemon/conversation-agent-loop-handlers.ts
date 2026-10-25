@@ -3469,9 +3469,9 @@ function handleUsage(
   // overwritten from that same call. Keeping a stale profile from an earlier
   // fallback would reintroduce the very contradiction this field prevents.
   state.exchangeInferenceProfile = event.actualInferenceProfile;
-  state.exchangeLlmCallCount += 1;
+  state.exchangeLlmCallCount += event.llmCallCount ?? 1;
   state.exchangeInputTokens += event.inputTokens;
-  state.lastCallInputTokens = event.inputTokens;
+  state.lastCallInputTokens = event.lastCallInputTokens ?? event.inputTokens;
   state.exchangeCacheCreationInputTokens += event.cacheCreationInputTokens ?? 0;
   state.exchangeCacheReadInputTokens += event.cacheReadInputTokens ?? 0;
   state.exchangeOutputTokens += event.outputTokens;

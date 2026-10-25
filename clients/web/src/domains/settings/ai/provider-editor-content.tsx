@@ -7,6 +7,9 @@ import { Input } from "@vellumai/design-library/components/input";
 import { Modal } from "@vellumai/design-library/components/modal";
 import { Typography } from "@vellumai/design-library/components/typography";
 
+import { CLAUDE_AGENT_SDK_PROVIDER } from "@/domains/settings/ai/constants";
+import { ClaudeAgentSdkSettings } from "@/domains/settings/ai/claude-agent-sdk-settings";
+import { useClaudeAgentSdkSettings } from "@/domains/settings/ai/use-claude-agent-sdk-settings";
 import { Trans, useTranslation } from "@/i18n";
 import {
   credentialPresenceQueryKey,
@@ -110,6 +113,8 @@ export function ProviderEditorContent({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isClaudeAgentSdk = provider === CLAUDE_AGENT_SDK_PROVIDER;
+  const sdkSettings = useClaudeAgentSdkSettings(assistantId, isClaudeAgentSdk);
   const isOpenAICompatible = provider === "openai-compatible";
   const allowsCustomBaseUrl = providerAllowsCustomBaseUrl(provider);
   const persistsConnectionModels = providerPersistsConnectionModels(provider);
@@ -184,7 +189,8 @@ export function ProviderEditorContent({
     isOpenAICompatible && labelChanged
       ? customProviderNameConflict(label, connections, connection?.name)
       : null;
-  const canSave = name.trim().length > 0 && nameConflict === null;
+  const canSave =
+    name.trim().length > 0 && nameConflict === null && sdkSettings.canSave;
 
   async function handleSave() {
     if (!canSave) {
@@ -193,6 +199,7 @@ export function ProviderEditorContent({
     setSaving(true);
     setError(null);
     try {
+      await sdkSettings.savePath();
       let auth: Auth;
 
       if (authType === "api_key") {
@@ -294,8 +301,12 @@ export function ProviderEditorContent({
       }
       warnOnFailedEndpointCheck(updated, t);
       onSave(updated);
-    } catch {
-      setError(t("providerEditorContent.failedSaveProvider"));
+    } catch (cause) {
+      setError(
+        isClaudeAgentSdk && cause instanceof Error
+          ? cause.message
+          : t("providerEditorContent.failedSaveProvider"),
+      );
     } finally {
       setSaving(false);
     }
@@ -344,124 +355,132 @@ export function ProviderEditorContent({
 
   const body = (
     <div className="space-y-4">
-        {/* Display Name */}
-        <div className="space-y-1">
-          <label className="block text-body-small-default text-[var(--content-tertiary)]">
-            <Trans
-              i18nKey="providerEditorContent.displayNameLabel"
-              ns="settings"
-              components={{
-                optional: (
-                  <span className="text-[var(--content-disabled)]" />
-                ),
-              }}
-            />
-          </label>
-          <Input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder={t("providerEditorContent.displayNamePlaceholder")}
-            fullWidth
+      {/* Display Name */}
+      <div className="space-y-1">
+        <label className="block text-body-small-default text-[var(--content-tertiary)]">
+          <Trans
+            i18nKey="providerEditorContent.displayNameLabel"
+            ns="settings"
+            components={{
+              optional: <span className="text-[var(--content-disabled)]" />,
+            }}
           />
-          {nameConflict ? (
-            <Typography
-              variant="body-small-default"
-              as="p"
-              className="text-(--system-negative-strong)"
-            >
-              {CUSTOM_PROVIDER_NAME_ERRORS[nameConflict]}
-            </Typography>
-          ) : null}
-        </div>
-
-        {allowsCustomBaseUrl && (
-          <div className="space-y-1">
-            <label className="block text-body-small-default text-[var(--content-tertiary)]">
-              {t("providerEditorContent.baseUrlLabel")}
-            </label>
-            <Input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={
-                provider === "ollama"
-                  ? t("providerEditorContent.baseUrlPlaceholderOllama")
-                  : provider === "opencode"
-                    ? t("providerEditorContent.baseUrlPlaceholderOpencode")
-                    : t("providerEditorContent.baseUrlPlaceholder")
-              }
-              fullWidth
-            />
-            {provider === "ollama" ? (
-              <Typography
-                variant="body-small-default"
-                as="p"
-                className="text-[var(--content-tertiary)]"
-              >
-                {t("providerEditorContent.baseUrlHintOllama")}
-              </Typography>
-            ) : null}
-            {provider === "opencode" ? (
-              <Typography
-                variant="body-small-default"
-                as="p"
-                className="text-[var(--content-tertiary)]"
-              >
-                {t("providerEditorContent.baseUrlHintOpencode")}
-              </Typography>
-            ) : null}
-          </div>
-        )}
-        {persistsConnectionModels && (
-          <div className="space-y-1">
-            <label className="block text-body-small-default text-[var(--content-tertiary)]">
-              {t("providerEditorContent.modelsLabel")}
-            </label>
-            <Input
-              value={connectionModels}
-              onChange={(e) => setConnectionModels(e.target.value)}
-              placeholder={t("providerEditorContent.modelsPlaceholder")}
-              fullWidth
-            />
-            <Typography
-              variant="body-small-default"
-              as="p"
-              className="text-[var(--content-tertiary)]"
-            >
-              {t("providerEditorContent.modelsHint")}
-            </Typography>
-          </div>
-        )}
-
-        {/* API Key + Advanced disclosure — only shown for api_key auth */}
-        {authType === "api_key" && (
-          <ProviderEditorApiKeySection
-            apiKeyValue={apiKeyValue}
-            onApiKeyChange={setApiKeyValue}
-            credential={credential}
-            onCredentialChange={setCredential}
-            isLoadingCredential={isLoadingCredential}
-            apiKeyPlaceholder={apiKeyPlaceholder}
-            provider={provider}
-            providerCredentials={providerCredentials}
-            showAdvancedSection={shouldShowAdvancedSection}
-            onError={setError}
-          />
-        )}
-
-        {/* ChatGPT Subscription OAuth — shown when auth type is oauth_subscription */}
-        {authType === "oauth_subscription" && (
-          <ChatgptOAuthSection assistantId={assistantId} onConnected={onSave} />
-        )}
-
-        {error && (
+        </label>
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder={t("providerEditorContent.displayNamePlaceholder")}
+          fullWidth
+        />
+        {nameConflict ? (
           <Typography
             variant="body-small-default"
             as="p"
             className="text-(--system-negative-strong)"
           >
-            {error}
+            {CUSTOM_PROVIDER_NAME_ERRORS[nameConflict]}
           </Typography>
-        )}
+        ) : null}
+      </div>
+
+      {allowsCustomBaseUrl && (
+        <div className="space-y-1">
+          <label className="block text-body-small-default text-[var(--content-tertiary)]">
+            {t("providerEditorContent.baseUrlLabel")}
+          </label>
+          <Input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder={
+              provider === "ollama"
+                ? t("providerEditorContent.baseUrlPlaceholderOllama")
+                : provider === "opencode"
+                  ? t("providerEditorContent.baseUrlPlaceholderOpencode")
+                  : t("providerEditorContent.baseUrlPlaceholder")
+            }
+            fullWidth
+          />
+          {provider === "ollama" ? (
+            <Typography
+              variant="body-small-default"
+              as="p"
+              className="text-[var(--content-tertiary)]"
+            >
+              {t("providerEditorContent.baseUrlHintOllama")}
+            </Typography>
+          ) : null}
+          {provider === "opencode" ? (
+            <Typography
+              variant="body-small-default"
+              as="p"
+              className="text-[var(--content-tertiary)]"
+            >
+              {t("providerEditorContent.baseUrlHintOpencode")}
+            </Typography>
+          ) : null}
+        </div>
+      )}
+      {persistsConnectionModels && (
+        <div className="space-y-1">
+          <label className="block text-body-small-default text-[var(--content-tertiary)]">
+            {t("providerEditorContent.modelsLabel")}
+          </label>
+          <Input
+            value={connectionModels}
+            onChange={(e) => setConnectionModels(e.target.value)}
+            placeholder={t("providerEditorContent.modelsPlaceholder")}
+            fullWidth
+          />
+          <Typography
+            variant="body-small-default"
+            as="p"
+            className="text-[var(--content-tertiary)]"
+          >
+            {t("providerEditorContent.modelsHint")}
+          </Typography>
+        </div>
+      )}
+
+      {isClaudeAgentSdk && (
+        <ClaudeAgentSdkSettings
+          executablePath={sdkSettings.executablePath}
+          onExecutablePathChange={sdkSettings.onExecutablePathChange}
+          error={sdkSettings.error}
+          onRetry={sdkSettings.onRetry}
+          disabled={sdkSettings.isLoading || saving}
+        />
+      )}
+
+      {/* API Key + Advanced disclosure — only shown for api_key auth */}
+      {authType === "api_key" && (
+        <ProviderEditorApiKeySection
+          apiKeyValue={apiKeyValue}
+          onApiKeyChange={setApiKeyValue}
+          credential={credential}
+          onCredentialChange={setCredential}
+          isLoadingCredential={isLoadingCredential}
+          apiKeyPlaceholder={apiKeyPlaceholder}
+          provider={provider}
+          providerCredentials={providerCredentials}
+          showAdvancedSection={shouldShowAdvancedSection}
+          onError={setError}
+        />
+      )}
+
+      {/* ChatGPT Subscription OAuth — shown when auth type is oauth_subscription */}
+      {authType === "oauth_subscription" && (
+        <ChatgptOAuthSection assistantId={assistantId} onConnected={onSave} />
+      )}
+
+      {error && (
+        <Typography
+          variant="body-small-default"
+          as="p"
+          className="text-(--system-negative-strong)"
+        >
+          {error}
+        </Typography>
+      )}
     </div>
   );
 
@@ -498,7 +517,9 @@ export function ProviderEditorContent({
   return (
     <Modal.Content size="md">
       <Modal.Header>
-        <Modal.Title>{t("providerEditorContent.editProviderTitle")}</Modal.Title>
+        <Modal.Title>
+          {t("providerEditorContent.editProviderTitle")}
+        </Modal.Title>
         <Modal.Description>
           {connection
             ? t("providerEditorContent.editingConnection", {

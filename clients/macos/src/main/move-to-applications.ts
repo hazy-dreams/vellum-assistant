@@ -1,10 +1,8 @@
 import { app, BrowserWindow, dialog, shell } from "electron";
 
-import {
-  readSetting,
-  writeSetting,
-} from "@vellumai/electron-desktop/settings";
+import { readSetting, writeSetting } from "@vellumai/electron-desktop/settings";
 
+import { PRIVATE_CANDIDATE } from "./private-candidate";
 import {
   getInstallLocation,
   isStrandedOutsideApplications,
@@ -115,6 +113,7 @@ function createInstallSplash(): BrowserWindow {
  * @see https://www.electronjs.org/docs/latest/api/app#appmovetoapplicationsfolderoptions-macos
  */
 export async function relocateToApplicationsFolder(): Promise<boolean> {
+  if (PRIVATE_CANDIDATE) return false;
   if (!app.isPackaged) {
     recordInstallLocation("unpackaged");
     return false;
@@ -217,6 +216,7 @@ export async function relocateToApplicationsFolder(): Promise<boolean> {
  * stranded afterwards.
  */
 export async function promptToRelocateIfStranded(): Promise<void> {
+  if (PRIVATE_CANDIDATE) return;
   if (!isStrandedOutsideApplications()) {
     return;
   }
@@ -255,20 +255,22 @@ export async function promptToRelocateIfStranded(): Promise<void> {
     return;
   }
 
-  await dialog.showMessageBox({
-    type: "error",
-    buttons: ["Show Me", "Close"],
-    defaultId: 0,
-    cancelId: 1,
-    message: `${name} couldn't move itself`,
-    detail:
-      `Drag ${name} into your Applications folder in Finder, then open it ` +
-      `from there.`,
-  }).then(({ response: fallbackResponse }) => {
-    if (fallbackResponse === 0) {
-      shell.showItemInFolder(app.getPath("exe"));
-    }
-  });
+  await dialog
+    .showMessageBox({
+      type: "error",
+      buttons: ["Show Me", "Close"],
+      defaultId: 0,
+      cancelId: 1,
+      message: `${name} couldn't move itself`,
+      detail:
+        `Drag ${name} into your Applications folder in Finder, then open it ` +
+        `from there.`,
+    })
+    .then(({ response: fallbackResponse }) => {
+      if (fallbackResponse === 0) {
+        shell.showItemInFolder(app.getPath("exe"));
+      }
+    });
 }
 
 // Test seam, exported only for unit-test setup. Production code never

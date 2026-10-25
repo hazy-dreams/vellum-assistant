@@ -13,9 +13,7 @@ mock.module("app-builder-lib/out/codeSign/macCodeSign", () => ({
   findIdentity: (...args) => findIdentityMock(...args),
 }));
 
-const {
-  __resolveSigningIdentityForTesting,
-} = require("./afterSign.js");
+const { __resolveSigningIdentityForTesting } = require("./afterSign.js");
 
 const originalCscName = process.env.CSC_NAME;
 const originalAppleSigningIdentity = process.env.APPLE_SIGNING_IDENTITY;
@@ -60,20 +58,32 @@ afterEach(() => {
 });
 
 describe("resolveSigningIdentity", () => {
-  test("uses electron-builder's temporary keychain for auto-discovered identities", async () => {
-    findIdentityMock = mock(async (certificateType, qualifier, keychainFile) => {
-      expect(certificateType).toBe("Developer ID Application");
-      expect(qualifier).toBeUndefined();
-      expect(keychainFile).toBe("/tmp/electron-builder.keychain");
+  test("explicit ad-hoc signing never discovers an ambient identity", async () => {
+    process.env.APPLE_SIGNING_IDENTITY = "must-not-be-used";
+    await expect(
+      __resolveSigningIdentityForTesting(
+        makeContext({ buildOptions: { identity: "-" } }),
+      ),
+    ).resolves.toEqual({ name: "-", sign: "-", keychainFile: null });
+    expect(findIdentityMock).not.toHaveBeenCalled();
+  });
 
-      return {
-        name: "Developer ID Application: Vellum AI, Inc. (ABCDE12345)",
-        hash: "1234567890ABCDEF",
-      };
-    });
+  test("uses electron-builder's temporary keychain for auto-discovered identities", async () => {
+    findIdentityMock = mock(
+      async (certificateType, qualifier, keychainFile) => {
+        expect(certificateType).toBe("Developer ID Application");
+        expect(qualifier).toBeUndefined();
+        expect(keychainFile).toBe("/tmp/electron-builder.keychain");
+
+        return {
+          name: "Developer ID Application: Vellum AI, Inc. (ABCDE12345)",
+          hash: "1234567890ABCDEF",
+        };
+      },
+    );
 
     await expect(
-      __resolveSigningIdentityForTesting(makeContext())
+      __resolveSigningIdentityForTesting(makeContext()),
     ).resolves.toEqual({
       name: "Developer ID Application: Vellum AI, Inc. (ABCDE12345)",
       sign: "1234567890ABCDEF",
@@ -94,7 +104,7 @@ describe("resolveSigningIdentity", () => {
     });
 
     await expect(
-      __resolveSigningIdentityForTesting(makeContext())
+      __resolveSigningIdentityForTesting(makeContext()),
     ).resolves.toMatchObject({
       name: "Developer ID Application: Vellum",
       sign: "ABCDEF1234567890",
@@ -103,7 +113,7 @@ describe("resolveSigningIdentity", () => {
 
   test("keeps electron-builder's arm64 ad-hoc fallback when no identity exists", async () => {
     await expect(
-      __resolveSigningIdentityForTesting(makeContext({ arch: 3 }))
+      __resolveSigningIdentityForTesting(makeContext({ arch: 3 })),
     ).resolves.toEqual({
       name: "-",
       sign: "-",

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+// Exercise the inherited public path; private guards have separate coverage.
+mock.module("./private-candidate", () => ({
+  PRIVATE_CANDIDATE: false,
+  PRIVATE_CLI_ENTRY: "",
+}));
+
 type ConflictType = "exists" | "existsAndRunning";
 type ConflictHandler = (conflictType: ConflictType) => boolean;
 

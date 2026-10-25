@@ -1013,3 +1013,48 @@ describe("PUT inference/active-profile validation", () => {
     expect(result).toEqual({ ok: true, activeProfile: "my-gemini" });
   });
 });
+
+describe("SDK-owned Claude model IDs", () => {
+  test("creates and updates runtime-only models without catalog or discovery state", async () => {
+    seedConnection("claude-subscription", "claude-agent-sdk");
+    const created = (await call("inference_profiles_create", {
+      body: {
+        name: "sdk-model",
+        provider: "claude-agent-sdk",
+        model: "claude-future-model-20271001",
+      },
+    })) as { entry: Record<string, unknown> };
+    expect(created.entry.model).toBe("claude-future-model-20271001");
+    const updated = (await call("inference_profiles_update", {
+      pathParams: { name: "sdk-model" },
+      body: { model: "claude-future-model-20271002" },
+    })) as { entry: Record<string, unknown> };
+    expect(updated.entry.model).toBe("claude-future-model-20271002");
+  });
+
+  test("accepts runtime-only IDs through a named SDK connection", async () => {
+    seedConnection("claude-personal", "claude-agent-sdk");
+    const created = (await call("inference_profiles_create", {
+      body: {
+        name: "sdk-named",
+        provider: "claude-personal",
+        model: "claude-future-model",
+      },
+    })) as { entry: Record<string, unknown> };
+    expect(created.entry.provider).toBe("claude-personal");
+  });
+
+  test("does not flag saved SDK models as unknown before discovery", async () => {
+    setConfig("llm", {
+      profiles: {
+        future: { provider: "claude-agent-sdk", model: "claude-future-model" },
+      },
+    });
+    const result = (await call("inference_profiles_list", {})) as {
+      profiles: Array<{ name: string; model: string; config_issue?: unknown }>;
+    };
+    const profile = result.profiles.find((entry) => entry.name === "future");
+    expect(profile?.model).toBe("claude-future-model");
+    expect(profile?.config_issue).toBeUndefined();
+  });
+});

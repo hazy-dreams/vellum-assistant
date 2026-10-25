@@ -196,6 +196,53 @@ export interface ProviderCatalogEntry {
  */
 const RAW_PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
+    id: "claude-agent-sdk",
+    displayName: "Claude subscription",
+    subtitle:
+      "Claude Agent SDK using your local Claude Code subscription sign-in.",
+    setupMode: "keyless",
+    setupHint:
+      "Install Claude Code and run claude auth login on this computer with your Claude subscription.",
+    credentialsGuide: {
+      description:
+        "Claude Code manages subscription authentication. API keys and custom endpoints are not supported on this route.",
+      url: "https://code.claude.com/docs/en/authentication",
+      linkLabel: "Claude Code authentication",
+    },
+    defaultModel: "sonnet",
+    models: [
+      {
+        id: "opus",
+        displayName: "Claude Opus (subscription)",
+        // Claude Code runs current models with a 1M window by default.
+        contextWindowTokens: 1_000_000,
+        supportsThinking: true,
+        supportsEffort: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+      {
+        id: "sonnet",
+        displayName: "Claude Sonnet (subscription)",
+        // Claude Code runs current models with a 1M window by default.
+        contextWindowTokens: 1_000_000,
+        supportsThinking: true,
+        supportsEffort: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+      {
+        id: "haiku",
+        displayName: "Claude Haiku (subscription)",
+        // Claude Code runs current models with a 1M window by default.
+        contextWindowTokens: 1_000_000,
+        supportsThinking: true,
+        supportsToolUse: true,
+        supportsVision: true,
+      },
+    ],
+  },
+  {
     id: "anthropic",
     displayName: "Anthropic",
     subtitle: "Claude models from Anthropic. Requires an Anthropic API key.",
@@ -488,6 +535,36 @@ const RAW_PROVIDER_CATALOG: ProviderCatalogEntry[] = [
               outputPer1mTokens: 75,
               cacheWritePer1mTokens: 25,
               cacheReadPer1mTokens: 2,
+            },
+          ],
+        },
+      },
+      {
+        id: "gpt-6.1-sol",
+        displayName: "GPT-6.1 Sol",
+        contextWindowTokens: 1050000,
+        maxOutputTokens: 128000,
+        longContextPricingThresholdTokens:
+          OPENAI_LONG_CONTEXT_PRICING_THRESHOLD_TOKENS,
+        supportsThinking: true,
+        supportsCaching: true,
+        supportsVision: true,
+        supportsToolUse: true,
+        supportsPromptCacheBreakpoints: true,
+        maxEffort: "max",
+        supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+        pricing: {
+          inputPer1mTokens: 2,
+          outputPer1mTokens: 10,
+          cacheWritePer1mTokens: 2.5,
+          cacheReadPer1mTokens: 0.1,
+          tiers: [
+            {
+              inputTokenThreshold: OPENAI_LONG_CONTEXT_PRICING_THRESHOLD_TOKENS,
+              inputPer1mTokens: 4,
+              outputPer1mTokens: 15,
+              cacheWritePer1mTokens: 5,
+              cacheReadPer1mTokens: 0.2,
             },
           ],
         },

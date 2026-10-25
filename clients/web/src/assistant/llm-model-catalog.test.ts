@@ -190,7 +190,9 @@ describe("parity with meta/llm-provider-catalog.json", () => {
 
   test("structured-decision models stay visible on the provider row but not in text pickers", () => {
     expect(
-      getModelsForProvider("typesafe").some((model) => model.id === "jev-latest"),
+      getModelsForProvider("typesafe").some(
+        (model) => model.id === "jev-latest",
+      ),
     ).toBe(true);
     expect(catalogModelSupportsText("typesafe", "jev-latest")).toBe(false);
     expect(providerOffersTextGeneration("typesafe")).toBe(false);
@@ -297,4 +299,19 @@ describe("parity with meta/llm-provider-catalog.json", () => {
       });
     });
   }
+});
+
+test("Sol 6.1 is available in both OpenAI and ChatGPT subscription selectors", () => {
+  for (const provider of ["openai", "chatgpt"]) {
+    expect(
+      getModelsForProvider(provider).find(
+        (model) => model.id === "gpt-6.1-sol",
+      ),
+    ).toMatchObject({
+      displayName: "GPT-6.1 Sol",
+      contextWindowTokens: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+  }
+  expect(CODEX_SUBSCRIPTION_MODEL_IDS.has("gpt-6.1-sol")).toBe(true);
 });

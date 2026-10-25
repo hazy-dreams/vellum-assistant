@@ -2576,5 +2576,33 @@
     "checkingDescription": "正在檢查通知權限…",
     "openTabDescription": "請保持 Vellum 分頁開啟以接收提醒。關閉或暫停分頁以及離線會暫停通知傳送。",
     "enable": "啟用通知"
+  },
+  "claudeAgentSdkSettings": {
+    "description": "透過 Claude Agent SDK 使用現有的 Claude Code 登入。在執行此助理的同一台電腦上安裝 Claude Code，並使用 Claude 訂閱登入。Vellum 不會啟動登入流程或要求輸入權杖。",
+    "billing": "使用 Claude 訂閱的額度和一般重試機制。請檢查設定檔和備援設定；獨立服務及個別指定的 API 供應商可能產生費用。預設供應商適用於沒有個別設定的請求。現有聊天設定檔和背景工作的個別設定仍會使用各自選定的供應商。 Claude Agent SDK 不提供嵌入向量。記憶嵌入仍使用單獨設定的後端，可能產生 API 或託管服務費用。",
+    "pathLabel": "Claude Code 執行檔路徑（選填）",
+    "pathPlaceholder": "自動尋找",
+    "pathHint": "留空以自動尋找 Claude Code，或輸入助理所在電腦上已安裝的 Claude Code 執行檔的絕對路徑。所有 Claude 訂閱設定檔共用此設定。",
+    "pathInvalid": "請輸入執行檔的絕對路徑，或留空以自動尋找。",
+    "checkingSupport": "正在檢查助理支援情況…",
+    "supportUnavailable": "無法檢查助理支援情況。請重新開啟設定以重試。",
+    "updateRequired": "請更新此助理以使用 Claude 訂閱。",
+    "loadFailed": "無法載入 Claude Code 設定。請重新開啟設定以重試。",
+    "saveFailed": "無法儲存 Claude Code 路徑。供應商尚未儲存，請重試。",
+    "rowMeta": "Claude 訂閱 · 本機 Claude Code 登入",
+    "retry": "重試"
+  },
+  "claudeModelDiscovery": {
+    "loading": "正在從本機 Claude Code 載入模型…",
+    "ready": "已從本機 Claude Code 取得模型。",
+    "empty": "Claude Code 未傳回可用模型。請檢查本機登入狀態並重新整理。",
+    "stale": "正在顯示先前取得的模型。請重新整理以檢查可用性。",
+    "loadFailed": "無法取得 Claude 模型。請確認執行助理的電腦已安裝 Claude Code 並已登入，然後重試。",
+    "supportFailed": "無法檢查助理是否支援取得 Claude 模型。請重試。",
+    "updateRequired": "請更新此助理，以取得 Claude 訂閱模型。",
+    "updatedAt": "上次取得時間：{time}",
+    "selectionUnavailable": "已儲存的模型 {model} 不在取得的清單中。已保留你的選擇。",
+    "refresh": "重新整理 Claude 模型",
+    "retry": "重新取得 Claude 模型"
   }
 }

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
+// Exercise the inherited public path; private guards have separate coverage.
+mock.module("./private-candidate", () => ({
+  PRIVATE_CANDIDATE: false,
+  PRIVATE_CLI_ENTRY: "",
+}));
+
 // --- Mocks ---
 // Must be installed before the `await import` of the module under test so
 // the mocked module graph is in place when `cli-path-installer.ts` (and its

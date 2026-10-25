@@ -1,3 +1,5 @@
+> **Juno custom branch:** source, build-only instructions and verification limits are in [JUNO.md](JUNO.md). This branch does not track private assistant state or publish releases.
+
 <p align="center">
   <img src="assets/banner.png" alt="Vellum Assistant" width="100%">
 </p>

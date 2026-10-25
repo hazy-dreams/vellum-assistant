@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import log from "./logger";
+import { PRIVATE_CANDIDATE, PRIVATE_CLI_ENTRY } from "./private-candidate";
 
 // Empty by default: the happy path floats to the environment's dist-tag.
 // Set by hand to pin the bundled CLI to an exact version.
@@ -150,6 +151,7 @@ export function getCliInstallDir(): string {
  * Non-fatal — failures are logged and leave the existing dir untouched.
  */
 export function migrateStaleInstallDir(): void {
+  if (PRIVATE_CANDIDATE) return;
   if (PINNED_CLI_VERSION) return;
 
   const cliRoot = getCliRootDir();
@@ -180,6 +182,7 @@ export function migrateStaleInstallDir(): void {
  * this, so local builds never touch the npm install path.
  */
 export function getCliBinPath(): string {
+  if (PRIVATE_CANDIDATE) return PRIVATE_CLI_ENTRY;
   return getLocalCliEntry() ?? binPathIn(getCliInstallDir());
 }
 
@@ -225,6 +228,7 @@ export function writeFileAtomicSync(
  * wrapper is never pointed at a missing binary.
  */
 export function writeCliLocator(): void {
+  if (PRIVATE_CANDIDATE) return;
   // Heal a stale versioned install dir first so the locator points at the
   // canonical path rather than an old version-named one (LUM-2648).
   migrateStaleInstallDir();
@@ -518,6 +522,18 @@ export function _resetInstallLock(): void {
  * lifecycle scripts are always suppressed via `--ignore-scripts`.
  */
 export async function ensureCliInstalled(): Promise<void> {
+  if (PRIVATE_CANDIDATE) {
+    if (
+      !path.isAbsolute(PRIVATE_CLI_ENTRY) ||
+      !existsSync(PRIVATE_CLI_ENTRY) ||
+      !existsSync(getBundledBunPath())
+    ) {
+      throw new Error(
+        "Private Juno runtime is incomplete. Refusing public CLI fallback.",
+      );
+    }
+    return;
+  }
   if (isCliInstalled() && !clearStaleInstallForAppUpdate()) {
     writeCliLocator();
     // Heal installs written before this field existed (or before a bun bump):
@@ -561,6 +577,7 @@ export async function ensureCliInstalled(): Promise<void> {
  * directory doesn't block the app from starting.
  */
 export function cleanupOldVersions(): void {
+  if (PRIVATE_CANDIDATE) return;
   try {
     const cliRoot = getCliRootDir();
     const keep = path.basename(getCliInstallDir());
@@ -571,7 +588,10 @@ export function cleanupOldVersions(): void {
       if (!entry.isDirectory()) continue;
 
       try {
-        rmSync(path.join(cliRoot, entry.name), { recursive: true, force: true });
+        rmSync(path.join(cliRoot, entry.name), {
+          recursive: true,
+          force: true,
+        });
       } catch {
         // Individual entry cleanup failure is non-fatal.
       }

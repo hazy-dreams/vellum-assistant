@@ -33,6 +33,7 @@ import { getLogger } from "../../util/logger.js";
 import { AnthropicProvider } from "../anthropic/client.js";
 import { AtlasCloudProvider } from "../atlascloud/client.js";
 import { BasetenProvider } from "../baseten/client.js";
+import { ClaudeAgentSdkProvider } from "../claude-agent-sdk/client.js";
 import { FireworksProvider } from "../fireworks/client.js";
 import { GeminiProvider } from "../gemini/client.js";
 import { IonetProvider } from "../ionet/client.js";
@@ -96,6 +97,14 @@ interface FallbackRoute {
  * module-load time.
  */
 const ADAPTER_FACTORIES: Record<string, AdapterFactory> = {
+  "claude-agent-sdk": ({ model, streamTimeoutMs, apiKey, baseURL }) => {
+    if (apiKey || baseURL) {
+      throw new Error(
+        "Claude subscription does not accept API keys or custom endpoints",
+      );
+    }
+    return new ClaudeAgentSdkProvider(model, { streamTimeoutMs });
+  },
   anthropic: ({
     apiKey,
     model,
@@ -580,6 +589,12 @@ function buildConnectionAdapter(
   }
   const entry = PROVIDER_CATALOG.find((e) => e.id === provider);
   if (!entry) {
+    return null;
+  }
+  if (
+    provider === "claude-agent-sdk" &&
+    (resolvedAuth.kind !== "none" || resolvedAuth.baseUrl)
+  ) {
     return null;
   }
   const isKeyless = entry.setupMode === "keyless";

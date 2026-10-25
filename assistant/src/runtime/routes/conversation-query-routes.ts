@@ -65,6 +65,7 @@ import {
   DefaultProviderSchema,
   LLMConfigBase,
   LLMConfigFragment,
+  LLMSchema,
   ProfileEntry,
   routingIdentityModelIssue,
   unknownLlmProviderIssue,
@@ -772,6 +773,7 @@ const ConfigGetResponseSchema = z
           provider_connection: z.string().optional(),
         }).optional(),
         defaultProvider: DefaultProviderSchema.optional(),
+        claudeAgentSdk: LLMSchema.shape.claudeAgentSdk,
         profiles: z.record(z.string(), WireProfileEntry).optional(),
         profileOrder: z.array(z.string()).optional(),
         activeProfile: z.string().optional(),
@@ -882,6 +884,7 @@ const ConfigPatchRequestSchema = z
           .passthrough()
           .nullable()
           .optional(),
+        claudeAgentSdk: LLMSchema.shape.claudeAgentSdk.nullable(),
         profiles: z
           .record(z.string(), ProfilePatchEntrySchema.nullable())
           .optional(),

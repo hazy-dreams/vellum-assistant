@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { resolvePrivateCliEntry } from "./scripts/private-build-config";
 
 import { SHARED_DESKTOP_INLINE_DEPS } from "../../packages/electron-desktop/src/inline-deps";
 
@@ -59,6 +60,9 @@ const LOCAL_CLI_ENTRY =
     : "";
 
 const BUILD_DEFINES = {
+  __VELLUM_PRIVATE_CLI_ENTRY__: JSON.stringify(
+    resolvePrivateCliEntry(process.env.VELLUM_PRIVATE_CLI_ENTRY),
+  ),
   __VELLUM_BUILD_SHA__: JSON.stringify(resolveBuildSha()),
   __VELLUM_ENVIRONMENT__: JSON.stringify(
     process.env.VELLUM_ENVIRONMENT || "local",

@@ -275,15 +275,12 @@ describe("collapseSectionRows", () => {
     expect(shown.length + hidden.length).toBe(options.length);
   });
 
-  test("spends the three rows on three lines, not three versions of one", () => {
-    // Astra, Sol, and Luna are each a line of their own, so the section
-    // leads with the GPT-6 member of each rather than walking down through
-    // the 5.6 versions.
+  test("offers Sol 6.1 in the leading OpenAI rows", () => {
     const { shown } = collapseSectionRows(optionsFor("openai"));
     expect(shown.map((option) => option.displayName)).toEqual([
       "GPT-6 Astra",
+      "GPT-6.1 Sol",
       "GPT-6 Sol",
-      "GPT-6 Luna",
     ]);
   });
 
