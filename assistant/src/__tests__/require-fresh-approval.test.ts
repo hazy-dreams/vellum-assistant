@@ -1,7 +1,7 @@
 /**
  * Tests for the requireFreshApproval context flag.
  *
- * Verifies non-interactive guardian denial of requireFreshApproval tools, that
+ * Verifies owner background prompting of requireFreshApproval tools, that
  * the flag is not set for regular tools, and that a `run_workflow` /
  * `manage_workflows` launch whose capability manifest grants side-effecting
  * tools or host functions prompts for fresh approval at launch.
@@ -65,7 +65,7 @@ let scopeOptionsOverride: ScopeOption[] | undefined;
 /**
  * Sentinel cell query the mocked builder returns. When set, the permission
  * checker must thread it into every gateway threshold read for the
- * invocation — including the non-interactive guardian background read.
+ * invocation — including the owner background provenance snapshot.
  */
 let cellQueryOverride: Record<string, unknown> | undefined;
 
@@ -145,7 +145,7 @@ mock.module("../tools/registry.js", () => ({
 // gate's capability floor stands on its own — these tests are about
 // fresh-approval promotion, not the channel matrix. `thresholdReads` records
 // every getAutoApproveThreshold call so tests can assert the cell query is
-// threaded into each read (including the background auto-approve).
+// threaded into each read.
 installThresholdReaderMock();
 
 /** Records every getAutoApproveThreshold call. */
@@ -184,9 +184,14 @@ function makeContext(overrides?: Partial<TC>): TC {
   };
 }
 
+let promptCalls = 0;
+
 function makePrompter(): PermissionPrompter {
   return {
-    prompt: async () => ({ decision: "allow" as const }),
+    prompt: async () => {
+      promptCalls += 1;
+      return { decision: "allow" as const };
+    },
     resolveConfirmation: () => {},
     updateSender: () => {},
     dispose: () => {},
@@ -198,10 +203,10 @@ afterAll(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Bypass 4: Non-interactive guardian auto-approve
+// Owner background policy prompting (no background-only auto-approve)
 // ---------------------------------------------------------------------------
 
-describe("requireFreshApproval: non-interactive guardian denial", () => {
+describe("requireFreshApproval: owner background prompting", () => {
   beforeEach(() => {
     fakeToolResult = { content: "ok", isError: false };
     checkResultOverride = undefined;
@@ -210,13 +215,14 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     thresholdReaderMock.threshold = "medium";
     cellQueryOverride = undefined;
     thresholdReadLog.length = 0;
+    promptCalls = 0;
   });
 
   afterEach(() => {});
 
-  test("regular tools are still auto-approved in non-interactive guardian sessions", async () => {
-    // Verify that the auto-approve path still works for normal tools
-    // at non-high risk levels
+  test("regular policy prompts reach owner background confirmation", async () => {
+    // A prompt verdict is preserved regardless of the classified risk;
+    // the owner can answer through the same prompter as foreground.
     riskOverride = RiskLevel.Medium;
     checkResultOverride = {
       decision: "prompt",
@@ -230,15 +236,13 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
       makeContext({ isInteractive: false, trustClass: "guardian" }),
     );
 
-    // Regular tools should be auto-approved
     expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 
-  test("the non-interactive guardian background read consults the channel cell", async () => {
-    // Regression: the background auto-approve re-read must carry the same
-    // channel-permission cell query as check(). Without it, a Slack guardian
-    // turn whose channel cell is Strict would be auto-approved off the looser
-    // background global — silently bypassing the cell.
+  test("the owner background provenance read consults the channel cell", async () => {
+    // The provenance threshold must carry the same strict channel cell as
+    // check(). There is no longer a second background override of its verdict.
     riskOverride = RiskLevel.Medium;
     checkResultOverride = { decision: "prompt", reason: "Needs approval" };
     cellQueryOverride = {
@@ -255,19 +259,15 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
       makeContext({ isInteractive: false, trustClass: "guardian" }),
     );
 
-    // Both threshold reads happen on this path — the provenance snapshot and
-    // the background auto-approve — and BOTH classify as "background" for a
-    // non-interactive guardian turn, so a find()-style assertion on the first
-    // matching entry can be satisfied by the provenance read alone. Assert
-    // the invariant directly instead: every threshold read for the
-    // invocation carries the cell query. One cell-less read is a bypass.
-    expect(thresholdReadLog.length).toBeGreaterThanOrEqual(2);
+    expect(promptCalls).toBe(1);
+    expect(thresholdReadLog).toHaveLength(1);
+    expect(thresholdReadLog[0]?.executionContext).toBe("background");
     for (const read of thresholdReadLog) {
       expect(read.cellQuery).toEqual(cellQueryOverride);
     }
   });
 
-  test("high-risk tools are denied in non-interactive guardian sessions", async () => {
+  test("high-risk fresh tools await owner background approval", async () => {
     riskOverride = RiskLevel.High;
     checkResultOverride = {
       decision: "prompt",
@@ -285,11 +285,11 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
       }),
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("requires user approval");
+    expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 
-  test("medium-risk tools are still auto-approved in non-interactive guardian sessions", async () => {
+  test("medium-risk policy prompts await owner background approval", async () => {
     riskOverride = RiskLevel.Medium;
     checkResultOverride = {
       decision: "prompt",
@@ -304,9 +304,10 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     );
 
     expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 
-  test("medium-risk gmail archive is auto-approved in non-interactive guardian sessions", async () => {
+  test("medium-risk gmail archive awaits owner background approval", async () => {
     riskOverride = RiskLevel.Medium;
     checkResultOverride = {
       decision: "prompt",
@@ -321,9 +322,10 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     );
 
     expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 
-  test("high-risk gmail send_draft is denied in non-interactive guardian sessions", async () => {
+  test("high-risk gmail send_draft awaits fresh owner background approval", async () => {
     riskOverride = RiskLevel.High;
     checkResultOverride = {
       decision: "prompt",
@@ -341,11 +343,11 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
       }),
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("requires user approval");
+    expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 
-  test("low-risk tools are still auto-approved in non-interactive guardian sessions", async () => {
+  test("low-risk policy prompts await owner background approval", async () => {
     riskOverride = RiskLevel.Low;
     checkResultOverride = {
       decision: "prompt",
@@ -360,6 +362,7 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     );
 
     expect(result.isError).toBe(false);
+    expect(promptCalls).toBe(1);
   });
 });
 

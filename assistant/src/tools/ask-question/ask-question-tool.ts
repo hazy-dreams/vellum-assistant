@@ -294,12 +294,13 @@ export const askQuestionTool = {
         ]
       : parsed.data.questions!;
 
-    // No interactive user is present to answer (scheduled/headless/background
-    // turn). Don't park the turn on a prompt no one can resolve — proceed with
-    // defaults immediately. Non-interactive turns are already instructed not to
-    // ask (NON_INTERACTIVE_CONTEXT_BLOCK); this is the backstop for when the
-    // model asks anyway, so it doesn't wait out the full response timeout.
-    if (context.isInteractive === false) {
+    // Machine origin is not absence of owner authority: guardian background
+    // turns may wait for an actual human answer using the same pending prompt,
+    // reconnect and timeout lifecycle as foreground turns. Keep the origin flag
+    // unchanged, and retain the non-owner backstop. Trust comes from ToolContext,
+    // never model input; upstream headless eligibility and channel/desktop
+    // delivery gates still apply.
+    if (context.isInteractive === false && context.trustClass !== "guardian") {
       return {
         content: desktopHelp
           ? "No interactive user is present to help in the virtual desktop. The obstacle remains unresolved."
@@ -326,7 +327,7 @@ export const askQuestionTool = {
     // Every other channel turn degrades to text: hand the model the formatted
     // question(s) and options to present in its reply — which IS what gets
     // delivered to the channel — and wait for a free-text answer. Mirrors the
-    // isInteractive guard above: return immediately instead of parking on a
+    // non-owner background guard above: return immediately instead of parking on a
     // prompt the surface can't answer. (UI surface tools like ui_show are
     // instead dropped from the wire for these channels; ask_question stays
     // available because a question with options reads cleanly as text.)

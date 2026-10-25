@@ -1,3 +1,4 @@
+import type { TrustClass } from "../runtime/trust-class.js";
 import type { PermissionPrompter } from "../permissions/prompter.js";
 import {
   attachInlineAttachmentToMessage,
@@ -41,13 +42,15 @@ export async function approveHostAttachmentRead(
   prompter: PermissionPrompter,
   conversationId: string,
   hasNoClient: boolean,
+  trustClass?: TrustClass,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const toolName = "host_file_read";
   const input = { path: filePath };
 
-  // HTTP-created sessions use a no-op sendToClient — prompting would
-  // block for the full permission timeout before auto-denying.
-  if (hasNoClient) {
+  // Background origin does not remove an owner's ability to approve a host
+  // attachment. Other clientless actors retain the existing fail-closed gate.
+  if (hasNoClient && trustClass !== "guardian") {
     log.info(
       { filePath },
       "Denying host attachment read: no interactive client connected",
@@ -65,6 +68,7 @@ export async function approveHostAttachmentRead(
     conversationId,
     "host",
     false,
+    signal,
   );
 
   return response.decision === "allow";

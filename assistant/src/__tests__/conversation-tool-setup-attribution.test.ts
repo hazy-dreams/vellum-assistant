@@ -334,7 +334,7 @@ describe("createToolExecutor isInteractive threading", () => {
   test("uses the resolved turn-level interactivity over live client state", async () => {
     // A scheduled/background turn (currentTurnIsNonInteractive=true) must read
     // as non-interactive even when a client is attached (hasNoClient=false), so
-    // ask_question short-circuits instead of parking on the response backstop.
+    // the turn origin stays truthful even when owner requests can await a reply.
     const { executor, calls } = makeCapturingExecutor();
     const toolFn = makeToolFn(
       executor,
@@ -407,6 +407,50 @@ describe("createToolExecutor unattended host-tool gate", () => {
 
     expect(result).toMatchObject({ isError: true });
     expect(result.content).toContain("requires an interactive user turn");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("owner background host tools dispatch normally while retaining their real approval context", async () => {
+    for (const indirect of [false, true]) {
+      const { executor, calls } = makeCapturingExecutor();
+      const ctx = makeCtx({
+        currentTurnIsNonInteractive: true,
+        hasNoClient: true,
+        transportInterface: "web",
+        currentTurnTrustContext: {
+          sourceChannel: "vellum",
+          trustClass: "guardian",
+        },
+      });
+      const tool = makeToolFn(executor, ctx);
+      const result = indirect
+        ? await tool("skill_execute", {
+            tool: "host_file_read",
+            input: { path: "/tmp/a" },
+          })
+        : await tool("host_bash", { command: "pwd" });
+      expect(result.isError).not.toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].context.isInteractive).toBe(false);
+      expect(calls[0].context.trustClass).toBe("guardian");
+    }
+  });
+
+  test("a guardian resting context never overrides a non-owner in-flight host request", async () => {
+    const { executor, calls } = makeCapturingExecutor();
+    const ctx = makeCtx({
+      currentTurnIsNonInteractive: true,
+      transportInterface: "web",
+      trustContext: { sourceChannel: "vellum", trustClass: "guardian" },
+      currentTurnTrustContext: {
+        sourceChannel: "vellum",
+        trustClass: "unknown",
+      },
+    });
+    expect(
+      (await makeToolFn(executor, ctx)("host_bash", { command: "pwd" }))
+        .isError,
+    ).toBe(true);
     expect(calls).toHaveLength(0);
   });
 

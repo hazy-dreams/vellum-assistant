@@ -189,9 +189,10 @@ export interface QuestionBatchMetadata {
  * user who types into the chat instead of using the card settles the prompt at
  * the enqueue handler: the typed text answers it, or, when it cannot stand in
  * for an answer, supersedes it (see
- * `daemon/handlers/conversations.ts`). A non-interactive turn resolves
- * immediately at the tool. The backstop only fires when a prompt is left open
- * with no response and no follow-up message.
+ * `daemon/handlers/conversations.ts`). Guardian background turns use this same
+ * pending lifecycle without changing their machine origin; non-owner background
+ * turns are still short-circuited by the tool. The backstop fires when a prompt
+ * is left open with no response and no follow-up message.
  */
 export class QuestionPrompter {
   async prompt(params: QuestionPromptParams): Promise<QuestionPromptOutcome> {

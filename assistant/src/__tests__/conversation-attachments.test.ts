@@ -470,6 +470,51 @@ describe("approveHostAttachmentRead", () => {
     expect(call[8]).toBe(false); // persistentDecisionsAllowed
   });
 
+  test("owner background host attachment asks and honors the actual answer", async () => {
+    const { approveHostAttachmentRead } =
+      await import("../daemon/conversation-attachments.js");
+    for (const decision of ["allow", "deny"] as const) {
+      const prompt = mock(() => Promise.resolve({ decision }));
+      const signal = new AbortController().signal;
+      const allowed = await approveHostAttachmentRead(
+        "/tmp/example.txt",
+        "/tmp",
+        { prompt } as never,
+        "owner-background-attachment",
+        true,
+        "guardian",
+        signal,
+      );
+      expect(allowed).toBe(decision === "allow");
+      expect(prompt).toHaveBeenCalledTimes(1);
+      const args = prompt.mock.calls[0] as unknown as unknown[];
+      expect(args[7]).toBe("host");
+      expect(args[8]).toBe(false);
+      expect(args[9]).toBe(signal);
+    }
+  });
+
+  test("non-owner background host attachment remains denied", async () => {
+    const { approveHostAttachmentRead } =
+      await import("../daemon/conversation-attachments.js");
+    for (const trust of ["unknown", "trusted_contact"] as const) {
+      const prompt = mock(() =>
+        Promise.resolve({ decision: "allow" as const }),
+      );
+      expect(
+        await approveHostAttachmentRead(
+          "/tmp/example.txt",
+          "/tmp",
+          { prompt } as never,
+          "non-owner-background-attachment",
+          true,
+          trust,
+        ),
+      ).toBe(false);
+      expect(prompt).not.toHaveBeenCalled();
+    }
+  });
+
   test("denies when hasNoClient is true without prompting", async () => {
     const conversation = createConversation("attachment-no-client");
     const promptSpy = mock(() =>

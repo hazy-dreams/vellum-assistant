@@ -105,43 +105,34 @@ afterEach(async () => {
 });
 
 describe("presence-stable tool schemas", () => {
-  test("foreground/helper/foreground has byte-identical ordered definitions but unchanged execution eligibility", () => {
+  test("owner foreground/helper/foreground has identical definitions and execution eligibility", () => {
     const ctx = makeCtx();
     const resolve = createResolveToolsCallback(definitions, ctx)!;
     const foreground = JSON.stringify(resolve([]));
     expect(ctx.allowedToolNames).toEqual(new Set(names));
     ctx.currentTurnIsNonInteractive = true;
     const background = JSON.stringify(resolve([]));
-    expect(ctx.allowedToolNames).toEqual(
-      new Set(
-        names.filter(
-          (name) =>
-            !["ask_question", "request_system_permission"].includes(name),
-        ),
-      ),
-    );
+    expect(ctx.allowedToolNames).toEqual(new Set(names));
     expect(
       ctx.registeredToolDefinitions?.map((def) => def.name).sort(),
     ).toEqual([...ctx.allowedToolNames!].sort());
-    expect(isToolActiveForContext("ask_question", ctx)).toBe(false);
-    expect(isToolActiveForContext("request_system_permission", ctx)).toBe(
-      false,
-    );
+    expect(isToolActiveForContext("ask_question", ctx)).toBe(true);
+    expect(isToolActiveForContext("request_system_permission", ctx)).toBe(true);
     expect(background).toBe(foreground);
     ctx.currentTurnIsNonInteractive = false;
     expect(JSON.stringify(resolve([]))).toBe(foreground);
     expect(ctx.allowedToolNames).toEqual(new Set(names));
   });
 
-  test("activity stripping stays byte-stable without changing execution eligibility", () => {
+  test("activity stripping stays byte-stable with owner execution parity", () => {
     const ctx = makeCtx({ currentTurnSendUserMessageActive: true });
     const resolve = createResolveToolsCallback(definitions, ctx)!;
     const foreground = JSON.stringify(resolve([]));
     expect(foreground).not.toContain('"activity"');
     ctx.currentTurnIsNonInteractive = true;
     expect(JSON.stringify(resolve([]))).toBe(foreground);
-    expect(ctx.allowedToolNames?.has("ask_question")).toBe(false);
-    expect(ctx.allowedToolNames?.has("request_system_permission")).toBe(false);
+    expect(ctx.allowedToolNames?.has("ask_question")).toBe(true);
+    expect(ctx.allowedToolNames?.has("request_system_permission")).toBe(true);
     ctx.currentTurnIsNonInteractive = false;
     expect(JSON.stringify(resolve([]))).toBe(foreground);
   });
@@ -258,7 +249,7 @@ describe("presence-stable tool schemas", () => {
     expect(JSON.stringify(completed)).toBe(prefix);
   });
 
-  test("background human-only calls fail the real approval gate through direct and skill dispatch", async () => {
+  test("owner background UI requests pass availability through direct and skill dispatch without faking interactivity", async () => {
     const ctx = makeCtx({ currentTurnIsNonInteractive: true });
     createResolveToolsCallback(definitions, ctx)!([]);
     const handler = new ToolApprovalHandler();
@@ -279,8 +270,13 @@ describe("presence-stable tool schemas", () => {
         if (!gate.allowed) {
           return gate.result;
         }
+        expect(context.isInteractive).toBe(false);
+        expect(context.trustClass).toBe("guardian");
         performed();
-        return { content: "unexpected execution" };
+        return {
+          content: "available for normal approval and execution",
+          isError: false,
+        };
       },
     } as unknown as ToolExecutor;
     const tool = createToolExecutor(
@@ -290,13 +286,41 @@ describe("presence-stable tool schemas", () => {
       ctx,
     );
     for (const name of ["ask_question", "request_system_permission"]) {
-      expect((await tool(name, {})).isError).toBe(true);
-      expect(
-        (await tool("skill_execute", { tool: name, input: {} })).isError,
-      ).toBe(true);
+      const input =
+        name === "ask_question"
+          ? {
+              questions: [
+                {
+                  question: "Continue?",
+                  options: [
+                    { id: "yes", label: "Yes" },
+                    { id: "no", label: "No" },
+                  ],
+                },
+              ],
+            }
+          : { permission_type: "microphone" };
+      expect((await tool(name, input)).isError).toBe(false);
+      expect((await tool("skill_execute", { tool: name, input })).isError).toBe(
+        false,
+      );
     }
-    expect(performed).not.toHaveBeenCalled();
+    expect(performed).toHaveBeenCalledTimes(4);
     expect(ctx.emit).not.toHaveBeenCalled();
+  });
+
+  test("non-owner background and frozen non-owner trust retain UI execution restrictions", () => {
+    for (const trustClass of ["unknown", "trusted_contact"] as const) {
+      const ctx = makeCtx({
+        currentTurnIsNonInteractive: true,
+        currentTurnTrustContext: { sourceChannel: "vellum", trustClass },
+      });
+      createResolveToolsCallback(definitions, ctx)!([]);
+      for (const name of ["ask_question", "request_system_permission"]) {
+        expect(isToolActiveForContext(name, ctx)).toBe(false);
+        expect(ctx.allowedToolNames?.has(name)).toBe(false);
+      }
+    }
   });
 
   test("platform, role, read-only, exclusions and disabled-tool boundaries remain restrictive", () => {
@@ -357,7 +381,7 @@ describe("presence-stable tool schemas", () => {
     );
   });
 
-  test("plugin definitions obey chat scope and keep presence-stable schemas without execution access", () => {
+  test("plugin definitions obey chat scope and owner background execution parity", () => {
     __clearRegistryForTesting();
     registerTool(definitions[0]!);
     registerPluginTools(
@@ -369,7 +393,9 @@ describe("presence-stable tool schemas", () => {
     const before = JSON.stringify(resolve([]));
     ctx.currentTurnIsNonInteractive = true;
     expect(JSON.stringify(resolve([]))).toBe(before);
-    expect(ctx.allowedToolNames).toEqual(new Set(["file_read"]));
+    expect(ctx.allowedToolNames).toEqual(
+      new Set(["file_read", "ask_question", "request_system_permission"]),
+    );
     ctx.enabledPlugins = [];
     expect(resolve([]).map((def) => def.name)).toEqual(["file_read"]);
   });

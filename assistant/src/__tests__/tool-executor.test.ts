@@ -1341,6 +1341,12 @@ describe("computePerToolTimeoutMs ask_question budget", () => {
     expect(askQuestionBudgetMs).toBe((questionResponseTimeoutSec + 5) * 1000);
   });
 
+  test("system-permission requests receive the same human response budget", () => {
+    expect(computePerToolTimeoutMs("request_system_permission", {})).toBe(
+      computePerToolTimeoutMs("ask_question", {}),
+    );
+  });
+
   test("the generic budget that would otherwise apply is shorter than the prompt timeout", () => {
     const { questionResponseTimeoutSec } = getConfig().timeouts;
     const genericBudgetMs = computePerToolTimeoutMs("some_other_tool", {});

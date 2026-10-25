@@ -457,6 +457,7 @@ export { isSideEffectTool } from "./side-effects.js";
  * the shorter generic budget trips first, orphaning the still-pending prompt
  * behind the confusing "may still be running in the background" error.
  *
+ * System-permission requests use the same question lifecycle and budget.
  * All other tools use the generic `toolExecutionTimeoutSec` configuration value.
  *
  * Consumed by `executeInternal` via `executeWithTimeout`, which is the
@@ -478,7 +479,7 @@ export function computePerToolTimeoutMs(
     );
     return (shellTimeoutSec + 5) * 1000;
   }
-  if (name === "ask_question") {
+  if (name === "ask_question" || name === "request_system_permission") {
     const { questionResponseTimeoutSec } = getConfig().timeouts;
     return (questionResponseTimeoutSec + 5) * 1000;
   }

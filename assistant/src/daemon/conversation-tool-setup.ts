@@ -268,6 +268,7 @@ export function createToolExecutor(
     if (
       HOST_TOOL_NAMES.has(toolName) &&
       isUnattended &&
+      ctx.getTurnOrRestingTrust?.()?.trustClass !== "guardian" &&
       transportInterface !== "chrome-extension"
     ) {
       return {
@@ -756,7 +757,9 @@ export function isToolActiveForContext(
   return isToolEligibleForContext(name, ctx, "execution");
 }
 
-/** Wire presence is stable; execution still requires a human for UI requests. */
+/** Wire presence is stable; owner background work keeps foreground access.
+ * Actual answers, approvals and host availability are enforced at execution.
+ */
 function isToolEligibleForContext(
   name: string,
   ctx: Conversation,
@@ -770,6 +773,11 @@ function isToolEligibleForContext(
   // falling through to live state.
   const pin = ctx.toolContextPin;
   const hasNoClient = pin ? pin.hasNoClient : ctx.hasNoClient;
+  // Turn trust, never a presence pin, is authority. Non-owner/headless calls
+  // retain the old presence boundary; role/read-only/transport gates below
+  // remain independent of owner background parity.
+  const canRequestUserInput =
+    !hasNoClient || ctx.getTurnOrRestingTrust?.()?.trustClass === "guardian";
   const channelCapabilities = pin ? undefined : ctx.channelCapabilities;
   const transportInterface = pin
     ? pin.transportInterface
@@ -873,7 +881,7 @@ function isToolEligibleForContext(
       // avoids a 5-minute prompter timeout when the LLM would otherwise call it.
       return false;
     }
-    return purpose === "wire" || !hasNoClient;
+    return purpose === "wire" || canRequestUserInput;
   }
   if (PLATFORM_TOOL_NAMES.has(name)) {
     // Check the *client's* platform, not the daemon's process.platform.
@@ -883,7 +891,7 @@ function isToolEligibleForContext(
       (clientOs === "macos" ||
         clientOs === "windows" ||
         clientOs === "linux") &&
-      (purpose === "wire" || !hasNoClient)
+      (purpose === "wire" || canRequestUserInput)
     );
   }
   if (SUBAGENT_ONLY_TOOL_NAMES.has(name)) {

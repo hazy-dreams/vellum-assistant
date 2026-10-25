@@ -1847,6 +1847,11 @@ export type InjectionMode = "full" | "minimal";
  * exact text for metadata persistence from a single source of truth.
  */
 export const NON_INTERACTIVE_CONTEXT_BLOCK =
+  "<non_interactive_context>\nThis owner-authorized turn started in the background. It has the same tool access and approval requirements as an interactive owner turn; do not assume the owner is watching. Continue independently when authorized. If a genuine decision, clarification, secret, or system permission is needed, use the available request tool and wait for the actual response. Never assume consent or an OS grant, and report a timeout or unavailable client as blocked. If recalled memory contains conflicting notes, prefer the explicit instruction in this message.\n</non_interactive_context>";
+
+// Retain the existing non-owner policy. Historical injections are persisted
+// verbatim and are never rebuilt from either current constant.
+export const NON_OWNER_NON_INTERACTIVE_CONTEXT_BLOCK =
   "<non_interactive_context>\nNon-interactive scheduled task — do not ask for clarification or confirmation. Follow the instructions exactly using your best judgment. If recalled memory contains conflicting notes, prefer the explicit instruction in this message.\n</non_interactive_context>";
 
 /**
@@ -2799,19 +2804,22 @@ export async function applyRuntimeInjections(
   // Their order here is load-bearing: each branch may mutate the tail
   // user message, so reordering changes how they interleave.
 
-  // For non-interactive conversations (scheduled jobs, work items), instruct the
-  // model to never ask for clarification — there is no human present to answer.
+  // Background origin is not a downgrade of owner authority or evidence that
+  // a user cannot answer. Preserve the restricted guidance for other actors.
   if (isNonInteractive) {
     const userTail = result[result.length - 1];
     if (userTail && userTail.role === "user") {
-      nonInteractiveContextCaptured = NON_INTERACTIVE_CONTEXT_BLOCK;
+      nonInteractiveContextCaptured =
+        turnCtx.trust.trustClass === "guardian"
+          ? NON_INTERACTIVE_CONTEXT_BLOCK
+          : NON_OWNER_NON_INTERACTIVE_CONTEXT_BLOCK;
       result = [
         ...result.slice(0, -1),
         {
           ...userTail,
           content: [
             ...userTail.content,
-            { type: "text" as const, text: NON_INTERACTIVE_CONTEXT_BLOCK },
+            { type: "text" as const, text: nonInteractiveContextCaptured },
           ],
         },
       ];

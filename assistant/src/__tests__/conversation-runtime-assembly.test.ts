@@ -1176,6 +1176,26 @@ describe("applyRuntimeInjections — injection mode", () => {
     );
   });
 
+  test("owner background guidance permits real questions while non-owner guidance remains restricted", async () => {
+    const owner = await applyRuntimeInjections(baseMessages, fullOptions);
+    expect(owner.blocks.nonInteractiveContextBlock).toContain(
+      "same tool access",
+    );
+    expect(owner.blocks.nonInteractiveContextBlock).toContain(
+      "actual response",
+    );
+    expect(owner.blocks.nonInteractiveContextBlock).not.toContain(
+      "do not ask for clarification",
+    );
+    const nonOwner = await applyRuntimeInjections(baseMessages, {
+      ...fullOptions,
+      trust: { sourceChannel: "vellum", trustClass: "unknown" },
+    });
+    expect(nonOwner.blocks.nonInteractiveContextBlock).toContain(
+      "do not ask for clarification",
+    );
+  });
+
   test("helper guidance appends without changing the canonical prefix on either transition", async () => {
     const first: Message[] = [
       { role: "user", content: [{ type: "text", text: "Original request" }] },

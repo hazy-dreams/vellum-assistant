@@ -187,19 +187,34 @@ SDK version report.
 ## Background continuation and tool definitions
 
 Helper notifications retain the parent conversation and run as non-interactive
-turns. The model-visible `ask_question` and `request_system_permission`
-definitions stay stable across presence changes where otherwise supported;
-the execution inventory still uses the original presence requirements. This
-avoids presence-only changes to the full-tool-array session fingerprint without
-marking background work interactive or granting it human-only UI execution.
-Platform, plugin, role, exclusion and cleanup restrictions remain in force.
+turns. Model-visible definitions stay stable across presence changes where
+otherwise supported. Guardian background turns retain foreground tool access:
+questions and policy-required approvals may await a real human response, and
+host tools and host attachments use their normal approval and client-routing
+paths instead of being rejected solely because a turn started in the background.
+The turn's captured trust remains authoritative; a presence pin or tool input
+cannot grant owner authority. Non-owner, role, read-only, platform, plugin,
+exclusion, explicit-deny, same-user host routing and cleanup restrictions remain.
+Foreground and background approval thresholds remain independently configurable;
+matching presets gives matching risk-policy behavior. Full Access is not an OS
+grant or a substitute for a question's actual response.
+
+System-permission requests now use a real question lifecycle even when tool risk
+policy auto-approves the invocation. They report the user's response and require
+verification by retrying the original operation, never claiming an OS grant.
+Unsupported channels and legacy native interfaces receive truthful fallback
+instead of an unanswerable card. Requests share the question timeout budget;
+abort and timeout clean up pending state. Reconnect during a live prompt is
+supported; suspension across a daemon restart is not promised.
 
 Offline regressions cover foreground/helper/foreground byte-identical tool
 schemas, one native session with appended-only requests, no historical action
-replay, unchanged prior-message prefixes, and direct/skill-dispatched execution
-denials. Real model, system, tool or canonical-history changes still invalidate
-reuse. Existing dirty/abort/settlement checks are unchanged. Same-session reuse
-preserves cache opportunities, not guaranteed server hits or quota savings.
+replay, unchanged prior-message prefixes, owner direct/skill-dispatch parity,
+non-owner restrictions, and real pending-question/approval lifecycle with
+simulated human responses. Real model, system, tool or canonical-history changes
+still invalidate reuse. Existing dirty/abort/settlement checks are unchanged.
+Same-session reuse preserves cache opportunities, not guaranteed server hits or
+quota savings. These tests do not certify real client delivery or OS grants.
 
 ## Session completion in the Juno branch
 

@@ -2250,6 +2250,8 @@ export async function runAgentLoopImpl(
             ctx.prompter,
             ctx.conversationId,
             ctx.hasNoClient,
+            ctx.getTurnOrRestingTrust()?.trustClass,
+            ctx.abortController?.signal,
           ),
         attachmentTargetMessageId,
         state.toolContentBlockToolNames,

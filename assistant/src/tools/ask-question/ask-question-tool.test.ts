@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+
+import { setConfig } from "../../__tests__/helpers/set-config.js";
+import type { QuestionRequestEvent } from "../../api/events/question-request.js";
 
 import type {
   QuestionPromptOutcome,
@@ -7,7 +10,8 @@ import type {
 } from "../../permissions/question-prompter.js";
 import type { ToolContext } from "../types.js";
 
-// Stub the prompter at the module level. The tool instantiates
+// Default to a stub prompter; lifecycle tests opt into the real one below.
+// The tool instantiates
 // `new QuestionPrompter(...)` inside `execute()`, so every call goes
 // through this constructor — we record `prompt()` calls into a shared
 // `calls` array and rotate `nextResult` per test via `setNextResult`.
@@ -22,6 +26,28 @@ const prepareDesktopHelp = mock(
 let promptError: Error | undefined;
 mock.module("../../desktop/desktop-help.js", () => ({ prepareDesktopHelp }));
 
+// Keep the actual prompt/registry lifecycle available for parity integration
+// tests; only desktop transport and guardian delivery are isolated here.
+const { QuestionPrompter: RealQuestionPrompter, buildBatchEntries } =
+  await import("../../permissions/question-prompter.js");
+const pendingInteractions =
+  await import("../../runtime/pending-interactions.js");
+const realEventHub = await import("../../runtime/assistant-event-hub.js");
+const questionEvents: QuestionRequestEvent[] = [];
+mock.module("../../runtime/assistant-event-hub.js", () => ({
+  ...realEventHub,
+  broadcastMessage: (event: { type: string }) => {
+    if (event.type === "question_request") {
+      questionEvents.push(event as QuestionRequestEvent);
+    }
+  },
+}));
+mock.module("../../permissions/question-guardian-request.js", () => ({
+  createGuardianRequestForQuestion: async () => {},
+  settlePromotedQuestionRequest: () => {},
+}));
+let useRealPrompter = false;
+
 const calls: QuestionPromptParams[] = [];
 let nextResult: QuestionPromptResult = {
   entries: [{ questionId: "q1", decision: "skipped" }],
@@ -35,6 +61,9 @@ mock.module("../../permissions/question-prompter.js", () => ({
   QuestionPrompter: class {
     async prompt(params: QuestionPromptParams): Promise<QuestionPromptOutcome> {
       calls.push(params);
+      if (useRealPrompter) {
+        return new RealQuestionPrompter().prompt(params);
+      }
       if (promptError) {
         throw promptError;
       }
@@ -71,6 +100,8 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
 // `setNextResult()` before invoking `askQuestionTool.execute(...)`.
 beforeEach(() => {
   calls.length = 0;
+  questionEvents.length = 0;
+  useRealPrompter = false;
   prepareDesktopHelp.mockClear();
   finishDesktopHelp.mockClear();
   promptError = undefined;
@@ -265,19 +296,36 @@ describe("AskQuestionTool.execute", () => {
     expect(result.content).toBe("Question aborted");
   });
 
-  test("short-circuits without prompting when no interactive user is present", async () => {
-    setNextResult(singleCompleted({ decision: "option", optionId: "a" }));
+  test.each(["trusted_contact", "unverified_contact", "unknown"] as const)(
+    "restricts non-owner background prompts: %s",
+    async (trustClass) => {
+      setNextResult(singleCompleted({ decision: "option", optionId: "a" }));
 
+      const result = await askQuestionTool.execute(
+        validInput,
+        makeContext({ isInteractive: false, trustClass }),
+      );
+
+      // The prompter must never be invoked — there is no one to answer, so the
+      // turn proceeds with defaults instead of parking on the response backstop.
+      expect(calls).toHaveLength(0);
+      expect(result.isError).toBe(false);
+      expect(result.content.toLowerCase()).toContain("no interactive user");
+    },
+  );
+
+  test("model-supplied trust cannot authorize an unresolved background actor", async () => {
     const result = await askQuestionTool.execute(
-      validInput,
-      makeContext({ isInteractive: false }),
+      { ...validInput, trustClass: "guardian", isInteractive: true },
+      // A malformed/unresolved context must fail closed, not assume guardian.
+      makeContext({
+        isInteractive: false,
+        trustClass: undefined as unknown as ToolContext["trustClass"],
+      }),
     );
-
-    // The prompter must never be invoked — there is no one to answer, so the
-    // turn proceeds with defaults instead of parking on the response backstop.
     expect(calls).toHaveLength(0);
-    expect(result.isError).toBe(false);
-    expect(result.content.toLowerCase()).toContain("no interactive user");
+    expect(result.answeredQuestion).toBeUndefined();
+    expect(result.content).toContain("No interactive user");
   });
 
   test("still prompts when isInteractive is true or unset", async () => {
@@ -388,17 +436,15 @@ describe("AskQuestionTool text fallback (supportsDynamicUi === false)", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("isInteractive:false short-circuits before the text fallback", async () => {
+  test("guardian background uses the same text fallback as foreground", async () => {
     const result = await askQuestionTool.execute(
       validInput,
       makeContext({ isInteractive: false, supportsDynamicUi: false }),
     );
 
-    // No interactive user present wins over the channel fallback: there is no
-    // one to answer at all, so proceed with defaults rather than emitting a
-    // question the turn would never get a reply to.
     expect(calls).toHaveLength(0);
-    expect(result.content.toLowerCase()).toContain("no interactive user");
+    expect(result.content).toBe(formatQuestionsAsTextFallback([singleQ]));
+    expect(result.answeredQuestion).toBeUndefined();
   });
 
   test("parks a single guardian question on a card-capable channel", async () => {
@@ -919,19 +965,42 @@ describe("virtual desktop help", () => {
     expect(result.isError).toBe(false);
   });
 
-  test("does not wait for a user in a background turn", async () => {
-    await askQuestionTool.execute(
-      {
-        desktopHelp: {
-          message: "Please complete the CAPTCHA.",
-          doneLabel: "Done",
-          skipLabel: "Skip",
+  test.each(["trusted_contact", "unverified_contact", "unknown"] as const)(
+    "does not reserve the desktop for non-owner background: %s",
+    async (trustClass) => {
+      await askQuestionTool.execute(
+        {
+          desktopHelp: {
+            message: "Please complete the CAPTCHA.",
+            doneLabel: "Done",
+            skipLabel: "Skip",
+          },
         },
-      },
-      makeContext({ isInteractive: false }),
-    );
-    expect(prepareDesktopHelp).not.toHaveBeenCalled();
+        makeContext({ isInteractive: false, trustClass }),
+      );
+      expect(prepareDesktopHelp).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  test("background desktop preparation failure never opens a question or claims handoff", async () => {
+    prepareDesktopHelp.mockImplementationOnce(async () => {
+      throw new Error("Desktop is unavailable or principal is unidentified");
+    });
+    await expect(
+      askQuestionTool.execute(
+        {
+          desktopHelp: {
+            message: "Please complete verification.",
+            doneLabel: "Done",
+            skipLabel: "Skip",
+          },
+        },
+        makeContext({ isInteractive: false }),
+      ),
+    ).rejects.toThrow("Desktop is unavailable or principal is unidentified");
     expect(calls).toHaveLength(0);
+    expect(finishDesktopHelp).not.toHaveBeenCalled();
   });
 
   test("rejects mixing desktop help with a question batch", async () => {
@@ -1024,4 +1093,201 @@ test("desktop reservation ends when presenting the question throws", async () =>
     ),
   ).rejects.toThrow("delivery failed");
   expect(finishDesktopHelp).toHaveBeenCalledWith(false);
+});
+
+// Unlike the formatter tests above, these exercise the real QuestionPrompter,
+// timeout/abort handlers and pending-interaction registry. Submitting a batch
+// below mirrors the response route; it is an explicit simulated human answer,
+// never a default synthesized by the tool from machine-origin context.
+describe("guardian background pending question lifecycle", () => {
+  beforeEach(() => {
+    useRealPrompter = true;
+    setConfig("timeouts", { questionResponseTimeoutSec: 0.1 });
+  });
+
+  afterEach(() => {
+    for (const pending of pendingInteractions.getByConversation("conv-1")) {
+      pending.rpcResolve?.({ entries: [], overall: "aborted" });
+    }
+  });
+
+  async function expectPending() {
+    // Desktop preparation includes an asynchronous import/reservation.
+    for (let i = 0; i < 20 && questionEvents.length === 0; i++) {
+      await Bun.sleep(1);
+    }
+    expect(questionEvents).toHaveLength(1);
+    const event = questionEvents[0]!;
+    const pending = pendingInteractions.get(event.requestId);
+    expect(pending?.kind).toBe("question");
+    expect(pending?.conversationId).toBe("conv-1");
+    expect(pending?.toolUseId).toBe("tu-1");
+    // These are the exact payloads used for reconnect rehydration.
+    expect(pending?.questionDetails?.entries).toEqual(event.questions);
+    expect(calls[0]?.signal).toBeDefined();
+    return event;
+  }
+
+  function submit(
+    event: QuestionRequestEvent,
+    kind: "option" | "skip",
+    optionId = "a",
+  ) {
+    const entry = pendingInteractions.get(event.requestId)!;
+    const ids = event.questions.map((q) => q.id);
+    const entries = buildBatchEntries(
+      ids,
+      (qid, oid) =>
+        event.questions
+          .find((q) => q.id === qid)!
+          .options.some((o) => o.id === oid),
+      new Set(ids),
+      [
+        {
+          questionId: "q1",
+          ...(kind === "option" ? { kind, optionId } : { kind }),
+        },
+      ],
+    );
+    pendingInteractions.resolve(event.requestId, "answered");
+    entry.rpcResolve?.({ entries, overall: "completed" });
+  }
+
+  test.each(["option", "skip", "timed_out", "aborted"] as const)(
+    "keeps background origin false and waits for %s, then cleans up",
+    async (outcome) => {
+      const ac = new AbortController();
+      const context = makeContext({ isInteractive: false, signal: ac.signal });
+      let settled = false;
+      const resultPromise = askQuestionTool
+        .execute(validInput, context)
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      const event = await expectPending();
+      expect(settled).toBe(false);
+      expect(context.isInteractive).toBe(false);
+      if (outcome === "option" || outcome === "skip") {
+        submit(event, outcome);
+      } else if (outcome === "aborted") {
+        ac.abort();
+      }
+      const result = await resultPromise;
+      expect(pendingInteractions.get(event.requestId)).toBeUndefined();
+      expect(context.isInteractive).toBe(false);
+      if (outcome === "option" || outcome === "skip") {
+        expect(result.isError).toBe(false);
+        expect(result.answeredQuestion?.requestId).toBe(event.requestId);
+        expect(result.answeredQuestion?.questions).toEqual(event.questions);
+        expect(result.answeredQuestion?.responses).toEqual([
+          outcome === "option"
+            ? { questionId: "q1", decision: "option", optionId: "a" }
+            : { questionId: "q1", decision: "skipped" },
+        ]);
+      } else {
+        expect(result.isError).toBe(true);
+        expect(result.content).toBe(
+          outcome === "aborted"
+            ? "Question aborted"
+            : "User did not respond within timeout",
+        );
+        expect(result.answeredQuestion).toBeUndefined();
+      }
+    },
+  );
+
+  test.each(["done", "skip", "timed_out", "aborted"] as const)(
+    "reserves desktop while a background human-help card waits for %s",
+    async (outcome) => {
+      const ac = new AbortController();
+      const context = makeContext({ isInteractive: false, signal: ac.signal });
+      const promise = askQuestionTool.execute(
+        {
+          desktopHelp: {
+            message: "Please complete the CAPTCHA.",
+            doneLabel: "Done",
+            skipLabel: "Skip",
+          },
+        },
+        context,
+      );
+      const event = await expectPending();
+      expect(prepareDesktopHelp).toHaveBeenCalledWith(context);
+      expect(context.isInteractive).toBe(false);
+      expect(finishDesktopHelp).not.toHaveBeenCalled();
+      expect(event.questions[0]?.presentation).toBe("virtual_desktop");
+      if (outcome === "done" || outcome === "skip") {
+        submit(event, "option", outcome);
+      } else if (outcome === "aborted") {
+        ac.abort();
+      }
+      const result = await promise;
+      expect(finishDesktopHelp).toHaveBeenCalledTimes(1);
+      expect(finishDesktopHelp).toHaveBeenCalledWith(outcome === "done");
+      expect(pendingInteractions.get(event.requestId)).toBeUndefined();
+      if (outcome === "done") {
+        expect(result.content).toContain("user finished interacting");
+        expect(result.content).toContain("verify the result");
+      } else if (outcome === "skip") {
+        expect(result.content).toContain("obstacle may still be present");
+      } else {
+        expect(result.isError).toBe(true);
+        expect(result.answeredQuestion).toBeUndefined();
+      }
+    },
+  );
+
+  test("background single guardian card-capable channel registers and awaits a real answer", async () => {
+    const ac = new AbortController();
+    const promise = askQuestionTool.execute(
+      validInput,
+      makeContext({
+        isInteractive: false,
+        supportsDynamicUi: false,
+        supportsGuardianQuestionCards: true,
+        signal: ac.signal,
+      }),
+    );
+    const event = await expectPending();
+    submit(event, "option", "b");
+    expect((await promise).answeredQuestion?.responses[0]?.optionId).toBe("b");
+    expect(pendingInteractions.get(event.requestId)).toBeUndefined();
+  });
+
+  test("background desktop help still rejects channels without desktop controls", async () => {
+    const result = await askQuestionTool.execute(
+      {
+        desktopHelp: {
+          message: "Please complete verification.",
+          doneLabel: "Done",
+          skipLabel: "Skip",
+        },
+      },
+      makeContext({
+        isInteractive: false,
+        supportsDynamicUi: false,
+        supportsGuardianQuestionCards: true,
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("continue in the Vellum app");
+    expect(prepareDesktopHelp).not.toHaveBeenCalled();
+    expect(questionEvents).toHaveLength(0);
+  });
+
+  test("background multi-question channel keeps text fallback even with card delivery", async () => {
+    const result = await askQuestionTool.execute(
+      { questions: [singleQ, singleQ] },
+      makeContext({
+        isInteractive: false,
+        supportsDynamicUi: false,
+        supportsGuardianQuestionCards: true,
+      }),
+    );
+    expect(result.content).toBe(
+      formatQuestionsAsTextFallback([singleQ, singleQ]),
+    );
+    expect(questionEvents).toHaveLength(0);
+  });
 });

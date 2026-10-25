@@ -22,7 +22,6 @@ import type {
   ApprovalReason,
   RiskThreshold,
 } from "../permissions/types.js";
-import { RiskLevel } from "../permissions/types.js";
 import { resolveCapabilities } from "../runtime/capabilities.js";
 import {
   type PermissionPromptOutcome,
@@ -161,10 +160,9 @@ export class PermissionChecker {
       );
 
       // Every threshold read for this invocation must consult the same
-      // channel-permission cell that check() used — otherwise a follow-up
-      // read of a looser global (the provenance snapshot below, the
-      // non-interactive guardian auto-approve further down) would override a
-      // stricter cell verdict. Derived once, from the same PolicyContext.
+      // channel-permission cell that check() used. The provenance snapshot
+      // must not read a looser global than the policy verdict. Derived once,
+      // from the same PolicyContext.
       const cellQuery = buildChannelPermissionCellQuery(policyContext);
 
       // Resolved threshold snapshot for provenance. getAutoApproveThreshold
@@ -229,16 +227,21 @@ export class PermissionChecker {
         };
       }
 
-      // Inline-command ("dynamic") skill loads execute embedded shell at load
-      // time. The sensitive-tool gate (tools/tool-approval-handler.ts, lane A)
-      // already routes an uncovered one through the guardian-mediated capability
-      // floor, so a non-guardian is escalated there and never reaches this lane.
-      // The one thing that floor does not express is the absence of a human: an
-      // uncovered dynamic load in a non-interactive session is denied here,
-      // because embedded shell must never run unattended without a covering rule.
-      // (A covering trust rule, matchType "user_rule", is left to proceed.)
+      // Presence is not authority: owner background turns use check()'s
+      // verdict just like foreground turns, including threshold-covered dynamic
+      // loads. Only owners may wait on their own background confirmations;
+      // contacts/headless callers retain the existing fail-closed behavior.
+      const canAwaitOwnerApproval = resolveCapabilities(
+        context.trustClass,
+      ).canSelfApproveTools;
+
+      // Inline-command loads execute embedded shell. The sensitive-tool gate
+      // remains responsible for non-owner escalation. Preserve this additional
+      // headless guard for uncovered non-owner loads, even if policy allows;
+      // an owner instead follows the same allow/prompt verdict as foreground.
       if (
         context.isInteractive === false &&
+        !canAwaitOwnerApproval &&
         isDynamicSkillLoadInvocation(name, input) &&
         classification.matchType !== "user_rule"
       ) {
@@ -294,67 +297,12 @@ export class PermissionChecker {
       }
 
       if (result.decision === "prompt") {
-        // Guardian-trust sessions (e.g. scheduled jobs, reminders) should be
-        // able to use bundled tools without interactive approval. The guardian
-        // is the owner - prompting makes no sense when there is no client.
-        // Exception: requireFreshApproval tools cannot be auto-approved -
-        // without a human present, bundle installation must be denied.
-        // Inline-command ("dynamic") skill loads are already denied above for
-        // non-interactive sessions (embedded shell with no human to review it),
-        // so they never reach this branch uncovered.
-        // Exception: tools above the configured background threshold are
-        // denied — unattended sessions must not auto-approve operations that
-        // could cause significant damage if triggered by prompt injection
-        // from untrusted content.
-        if (
-          context.isInteractive === false &&
-          resolveCapabilities(context.trustClass).canSelfApproveTools &&
-          !context.requireFreshApproval
-        ) {
-          // getAutoApproveThreshold returns from cache (populated by check() above).
-          // Deferred inside the non-interactive branch so interactive prompts
-          // don't pay the gateway I/O cost. The cell query is threaded through
-          // so a strict channel cell governs this auto-approve too — without
-          // it, a looser background global would silently bypass the cell.
-          const bgThreshold = await getAutoApproveThreshold(
-            context.conversationId,
-            "background",
-            cellQuery,
-            context.requesterContactId,
-          );
-          const thresholdOrdinal: Record<string, number> = {
-            none: -1,
-            low: 0,
-            medium: 1,
-            high: 2,
-          };
-          const riskOrdinal: Record<string, number> = {
-            [RiskLevel.Low]: 0,
-            [RiskLevel.Medium]: 1,
-            [RiskLevel.High]: 2,
-          };
-          const withinThreshold =
-            (riskOrdinal[riskLevel] ?? 2) <=
-            (thresholdOrdinal[bgThreshold] ?? 0);
-          if (withinThreshold) {
-            log.info(
-              { toolName: name, riskLevel },
-              "Auto-approving for non-interactive guardian session",
-            );
-            return {
-              allowed: true,
-              decision: "guardian_auto_approve",
-              riskLevel,
-              riskMeta,
-              ...mapApprovalProvenance("guardian_auto_approve", {}),
-              riskThreshold: bgThreshold as RiskThreshold,
-            };
-          }
-        }
-
-        // Non-interactive sessions have no client to respond to prompts -
-        // deny immediately instead of blocking for the full permission timeout.
-        if (context.isInteractive === false) {
+        // A guardian background turn may surface a genuine confirmation and
+        // wait for the same human response/timeout/cancellation as foreground.
+        // Do not re-evaluate a prompt against a looser background threshold:
+        // check() already resolved the applicable policy and channel cell, and
+        // forcePromptSideEffects/fresh-review promotions must remain prompts.
+        if (context.isInteractive === false && !canAwaitOwnerApproval) {
           log.info(
             { toolName: name, riskLevel },
             "Auto-denying prompt for non-interactive session",
