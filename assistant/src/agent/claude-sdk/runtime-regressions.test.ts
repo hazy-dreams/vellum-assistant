@@ -17,7 +17,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { assertNotLiveDb } from "../../__tests__/assert-not-live-db.js";
 import { getConfig } from "../../config/loader.js";
+import {
+  recordEstimate,
+  resetCalibrations,
+} from "../../context/estimator-calibration.js";
 import { getToolResultFilePath } from "../../context/post-turn-tool-result-truncation.js";
+import {
+  estimatePromptTokensRaw,
+  estimateToolsTokens,
+} from "../../context/token-estimator.js";
 import type { Conversation } from "../../daemon/conversation.js";
 import {
   registerPluginHooks,
@@ -28,7 +36,7 @@ import type {
   PostToolUseContext,
 } from "../../hooks/types.js";
 import type { PluginHooks } from "../../plugins/types.js";
-import type { ToolDefinition } from "../../providers/types.js";
+import type { Message, ToolDefinition } from "../../providers/types.js";
 import type { AgentEvent, LoopToolExecutor } from "../loop.js";
 import { type ClaudeSdkRunOptions, runClaudeSdkAgent } from "./runtime.js";
 
@@ -197,6 +205,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   unregisterPluginHooks(pluginName);
+  resetCalibrations();
   getConfig().llm.claudeAgentSdk = previousSdkConfig;
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
@@ -380,7 +389,142 @@ function visibleText(events: AgentEvent[]): string {
     .join("");
 }
 
+function rawEstimate(
+  options: ClaudeSdkRunOptions,
+  history = options.canonicalMessages ?? options.run.messages,
+  tools = options.tools,
+): number {
+  return estimatePromptTokensRaw(
+    history,
+    options.tokenEstimation?.systemPrompt ?? options.systemPrompt,
+    {
+      providerName: "anthropic",
+      model: options.tokenEstimation
+        ? options.tokenEstimation.model
+        : options.model,
+      toolTokenBudget: estimateToolsTokens(tools),
+    },
+  );
+}
+
 describe("Claude SDK root runtime regressions", () => {
+  test("streamed calibration samples use raw canonical input, system and Anthropic media rules before output", async () => {
+    const f = transport(async function* () {
+      yield* textBlocks("calibration", ["Current output ".repeat(1000)]);
+      yield result();
+    });
+    f.options.canonicalMessages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Canonical context ".repeat(500) },
+          {
+            type: "file",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: "YQ==",
+            },
+          },
+        ],
+      },
+    ];
+    f.options.tokenEstimation = {
+      systemPrompt: "Full unstripped estimator instructions ".repeat(100),
+      model: "claude-sonnet-4-6",
+    };
+    const expected = rawEstimate(f.options);
+    recordEstimate("anthropic", "claude-fixture", expected, expected * 2);
+    const output = await runClaudeSdkAgent(f.options);
+    expect(output.error).toBeUndefined();
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      inputTokens: 31,
+      estimatedInputTokens: expected,
+    });
+    expect(expected).toBeGreaterThan(
+      rawEstimate(f.options, f.options.run.messages),
+    );
+    expect(expected).toBeLessThan(rawEstimate(f.options, output.history));
+  });
+
+  test("each streamed sample includes prior tools and results and the live replacement schemas", async () => {
+    let nextHistory: Message[] = [];
+    const replacement = [
+      {
+        ...definition("second_tool"),
+        description: "Expanded schema instructions ".repeat(200),
+      },
+    ];
+    const f = transport(async function* ({ options }) {
+      yield* toolFrames("calibration-tool");
+      const client = await connect(options.mcpServers?.vellum);
+      await authorize(options, "calibration-tool");
+      await invoke(client, "calibration-tool");
+      await checkpoint(options);
+      yield* textBlocks("after-tool", [
+        "Final output must not enter its own sample ".repeat(100),
+      ]);
+      yield result();
+    });
+    f.options.resolveTools = () => replacement;
+    f.options.run.onCheckpoint = ({ history }) => {
+      nextHistory = structuredClone(history);
+      return "continue";
+    };
+    const initial = rawEstimate(f.options);
+    const output = await runClaudeSdkAgent(f.options);
+    expect(output.error).toBeUndefined();
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(2);
+    expect(usage[0]?.estimatedInputTokens).toBe(initial);
+    expect(usage[1]?.estimatedInputTokens).toBe(
+      rawEstimate(f.options, nextHistory, replacement),
+    );
+    expect(rawEstimate(f.options, nextHistory, replacement)).toBeGreaterThan(
+      initial,
+    );
+    expect(JSON.stringify(nextHistory)).toContain("Performed once");
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  test("assistant-only aggregate usage never claims a streamed calibration sample", async () => {
+    const f = transport(async function* () {
+      yield* textBlocks("streamed-first", ["Streamed reply"]);
+      const first = assistantFrame("fallback-first", [
+        { type: "text", text: "First fallback", citations: [] },
+      ]);
+      yield { ...first, uuid: "00000000-0000-4000-8000-000000000002" };
+      const second = assistantFrame("fallback-second", [
+        { type: "text", text: "Second fallback", citations: [] },
+      ]);
+      yield { ...second, uuid: "00000000-0000-4000-8000-000000000003" };
+      yield result();
+    });
+    const expected = rawEstimate(f.options);
+    const output = await runClaudeSdkAgent(f.options);
+    expect(output.error).toBeUndefined();
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(2);
+    expect(usage[0]?.estimatedInputTokens).toBe(expected);
+    expect(usage[1]).toMatchObject({ llmCallCount: 2, inputTokens: 4 });
+    expect(usage[1]?.estimatedInputTokens).toBeUndefined();
+  });
+
+  test("a lone assistant-only usage event stays uncalibrated", async () => {
+    const f = transport(async function* () {
+      yield assistantFrame("fallback", [
+        { type: "text", text: "Fallback", citations: [] },
+      ]);
+      yield result();
+    });
+    await runClaudeSdkAgent(f.options);
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(1);
+    expect(usage[0]?.estimatedInputTokens).toBeUndefined();
+  });
+
   test("partial assistant frames do not split multi-block canonical messages or duplicate usage", async () => {
     const f = transport(async function* () {
       yield* textBlocks("multi-block", [
@@ -803,6 +947,12 @@ describe("Claude SDK root runtime regressions", () => {
     expect(f.prompts).toHaveLength(2);
     expect(JSON.stringify(f.prompts[1])).toContain("Check the answer again");
     expect(visibleText(f.events)).toBe("Verified answer");
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(2);
+    expect(usage[0]?.estimatedInputTokens).toBe(rawEstimate(f.options));
+    expect(usage[1]?.estimatedInputTokens).toBe(
+      rawEstimate(f.options, output.history.slice(0, -1)),
+    );
     expect(output.newMessages).toEqual([
       {
         role: "user",
@@ -872,6 +1022,12 @@ describe("Claude SDK root runtime regressions", () => {
     );
     expect(JSON.stringify(second.prompts[0])).not.toContain("First answer");
     expect(resumed.history).toHaveLength(4);
+    const usage = second.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(1);
+    expect(usage[0]?.estimatedInputTokens).toBe(rawEstimate(second.options));
+    expect(rawEstimate(second.options)).toBeGreaterThan(
+      rawEstimate(second.options, second.options.canonicalMessages.slice(-1)),
+    );
   });
 
   test("foreground helper foreground keeps one native session with appended-only requests", async () => {
@@ -1256,6 +1412,12 @@ describe("Claude SDK root runtime regressions", () => {
     expect(JSON.stringify(f.prompts[1])).toContain("Performed once");
     expect(JSON.stringify(f.prompts[1])).toContain(
       "Private instruction for the next model call",
+    );
+    const usage = f.events.filter((event) => event.type === "usage");
+    expect(usage).toHaveLength(2);
+    expect(usage[0]?.estimatedInputTokens).toBe(rawEstimate(f.options));
+    expect(usage[1]?.estimatedInputTokens).toBe(
+      rawEstimate(f.options, output.history.slice(0, -1)),
     );
     expect(JSON.stringify(output.history)).not.toContain(
       "Private instruction for the next model call",
@@ -1720,6 +1882,12 @@ describe("Claude SDK root runtime regressions", () => {
       );
       expect(JSON.stringify(first.events)).not.toContain(
         "Private fixture guidance",
+      );
+      const usage = first.events.filter((event) => event.type === "usage");
+      expect(usage).toHaveLength(2);
+      expect(usage[0]?.estimatedInputTokens).toBe(rawEstimate(first.options));
+      expect(usage[1]?.estimatedInputTokens).toBe(
+        rawEstimate(first.options, completed.history.slice(0, -1)),
       );
       const saved = JSON.parse(
         await readFile(join(directory, ".claude-sdk-session.json"), "utf8"),

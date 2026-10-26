@@ -111,6 +111,29 @@ and conversation history. If saving an oversized tool result fails, the SDK brid
 continues with the completed in-memory result, matching the native loop. It does
 not rerun the tool to recover a spool file.
 
+## Context estimation and automatic compaction
+
+Each root streamed model call pairs its raw local prompt estimate with Claude's
+reported input, including cache reads and cache creation. The estimate covers
+full canonical history, the caller's system-prompt scope and current Vellum tool
+definitions before that call adds output. Resumed sessions are estimated from
+full history, not just the appended prompt. Native-only overhead is learned
+through the existing actual-to-estimated correction ratio, rather than a fixed
+extra-token allowance.
+
+Foreground turns and background wakes use the same calibration recorder and
+canonical provider key as the existing budget estimators. Assistant-only fallback
+usage remains uncalibrated because it can aggregate multiple calls without a
+reliable input boundary. Aggregate events never train one prompt's estimate;
+usage totals and call counts retain their existing accounting.
+
+Calibrated estimates feed Vellum's existing turn-start compaction checks. They do
+not add checks or stop/restart machinery inside a running SDK query. The shared
+calibrator retains its minimum-sample and outlier guards, smoothing and
+process-local lifetime: restarting clears learned corrections. This is not an
+exact tokenizer or a guarantee that every native call stays below the configured
+Vellum budget.
+
 ## History, resume and interruption
 
 Vellum persists only a session mapping, message hashes and an in-flight marker

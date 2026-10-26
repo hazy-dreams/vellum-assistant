@@ -2445,6 +2445,11 @@ export class AgentLoop {
               conversationId: this.conversationId,
               conversationDir,
               systemPrompt: providerOptions.systemPrompt ?? "",
+              tokenEstimation: {
+                systemPrompt: runSystemPrompt,
+                providerName: getCalibrationProviderKey(this.provider),
+                model: this.provider.defaultModel,
+              },
               tools: attachNativeWebSearch
                 ? currentTools.filter((tool) => tool !== NATIVE_WEB_SEARCH_TOOL)
                 : currentTools,

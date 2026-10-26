@@ -11,6 +11,10 @@ import { z } from "zod";
 import { getConfig } from "../../config/loader.js";
 import { SEND_USER_MESSAGE_TOOL_NAME } from "../../config/send-user-message-constants.js";
 import { preModelCallSanitize } from "../../context/outbound-sanitize.js";
+import {
+  estimatePromptTokensRaw,
+  estimateToolsTokens,
+} from "../../context/token-estimator.js";
 import { spoolAndStubOversizedToolResults } from "../../context/tool-result-spool.js";
 import type { AgentLoopExitReason } from "../../hooks/types.js";
 import { HOOKS } from "../../plugin-api/constants.js";
@@ -64,6 +68,12 @@ export interface ClaudeSdkRunOptions {
   conversationId: string;
   conversationDir: string | null;
   systemPrompt: string;
+  /** Raw estimator scope shared with the caller's canonical budget gates. */
+  tokenEstimation?: {
+    systemPrompt: string;
+    providerName?: string;
+    model?: string;
+  };
   tools: ToolDefinition[];
   toolExecutor: LoopToolExecutor | null;
   model: string;
@@ -227,6 +237,7 @@ export async function runClaudeSdkAgent(
     cacheReadInputTokens: 0,
   };
   let messageStartedAt = 0;
+  let estimatedInputTokens: number | undefined;
   const flushFallbackUsage = async (
     outputTokens?: number,
     durationMs = 0,
@@ -917,6 +928,19 @@ export async function runClaudeSdkAgent(
         if (frame.type === "message_start") {
           observeGuidanceContinuation();
           await finalizeMessage(null);
+          // Match the canonical budget gates, before this call adds output.
+          estimatedInputTokens = estimatePromptTokensRaw(
+            history,
+            options.tokenEstimation?.systemPrompt ?? options.systemPrompt,
+            {
+              providerName:
+                options.tokenEstimation?.providerName ?? "anthropic",
+              model: options.tokenEstimation
+                ? options.tokenEstimation.model
+                : options.model,
+              toolTokenBudget: estimateToolsTokens(toolSet),
+            },
+          );
           streamingMessageId = frame.message.id;
           model = frame.message.model;
           pendingStopReason = null;
@@ -1017,6 +1041,7 @@ export async function runClaudeSdkAgent(
           await emit({
             type: "usage",
             ...pendingUsage,
+            estimatedInputTokens,
             inputTokens:
               pendingUsage.inputTokens +
               pendingUsage.cacheCreationInputTokens +
@@ -1025,6 +1050,7 @@ export async function runClaudeSdkAgent(
             actualProvider: "claude-agent-sdk",
             providerDurationMs: Date.now() - messageStartedAt,
           });
+          estimatedInputTokens = undefined;
           streamedOutputTokens += pendingUsage.outputTokens;
           streamedCallCount += 1;
           if (streamingMessageId) {

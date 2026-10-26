@@ -12,6 +12,7 @@ import { v4 as uuid } from "uuid";
 
 import { onActivationToolCall } from "../activation/turn-hooks.js";
 import type { AgentEvent } from "../agent/loop.js";
+import { recordUsageEstimate } from "../agent/usage-calibration.js";
 import { resolveComputerUseToolName } from "../api/computer-use-tool.js";
 import type { AnsweredQuestion } from "../api/events/question-answered.js";
 import type {
@@ -28,9 +29,7 @@ import { isAssistantFeatureFlagEnabled } from "../config/assistant-feature-flags
 import { getConfig } from "../config/loader.js";
 import { SEND_USER_MESSAGE_TOOL_NAME } from "../config/send-user-message-constants.js";
 import { resolveSendUserMessageActive } from "../config/send-user-message-gate.js";
-import { recordEstimate } from "../context/estimator-calibration.js";
 import { stripInjectionsForCompaction } from "../context/strip-injections.js";
-import { getCalibrationProviderKey } from "../context/token-estimator.js";
 import type { ProviderMessageMetadata } from "../messaging/provider-message-metadata.js";
 import {
   formatSlackTimezoneLabel,
@@ -3477,32 +3476,7 @@ function handleUsage(
   state.exchangeOutputTokens += event.outputTokens;
   state.model = event.model;
 
-  // Feed the self-calibration loop: compare the pre-send estimate to the
-  // provider's ground-truth inputTokens. `recordEstimate` silently ignores
-  // samples below its magnitude threshold or outside its outlier bounds,
-  // so it's safe to call unconditionally.
-  //
-  // The calibration key must match what `estimatePromptTokens` callers look
-  // up — use the canonical provider key (`tokenEstimationProvider ?? name`),
-  // falling back to the response's `actualProvider` only when neither hint
-  // is set on the provider object (shouldn't happen, but cheap). Using
-  // `event.actualProvider` as the primary key would scatter data across
-  // mismatched keys for wrapper providers like OpenRouter.
-  const calibrationProviderKey =
-    getCalibrationProviderKey(deps.ctx.provider) ||
-    (event.actualProvider ?? "");
-  if (
-    calibrationProviderKey.length > 0 &&
-    event.estimatedInputTokens !== undefined &&
-    event.estimatedInputTokens > 0
-  ) {
-    recordEstimate(
-      calibrationProviderKey,
-      event.model,
-      event.estimatedInputTokens,
-      event.inputTokens,
-    );
-  }
+  recordUsageEstimate(deps.ctx.provider, event);
   if (event.rawResponse !== undefined) {
     state.exchangeRawResponses.push(event.rawResponse);
   }

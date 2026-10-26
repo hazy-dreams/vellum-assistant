@@ -1,17 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
+import type {
+  SDKMessage,
+  SDKResultSuccess,
+} from "@anthropic-ai/claude-agent-sdk";
+
 import {
   createMockProvider,
   textResponse,
 } from "../__tests__/helpers/mock-provider.js";
 import { setConfig } from "../__tests__/helpers/set-config.js";
+import type { AssistantEvent } from "../api/index.js";
 import { resolveCallSiteConfig } from "../config/llm-resolver.js";
 import { getConfig } from "../config/loader.js";
 import type { ProfileEntry } from "../config/schemas/llm.js";
+import {
+  getCorrection,
+  resetCalibrations,
+} from "../context/estimator-calibration.js";
+import { estimatePromptTokensWithTools } from "../context/token-estimator.js";
+import {
+  createEventHandlerState,
+  dispatchAgentEvent,
+  type EventHandlerDeps,
+} from "../daemon/conversation-agent-loop-handlers.js";
 import { getDb } from "../persistence/db-connection.js";
 import { initializeDb } from "../persistence/db-init.js";
+import { HOOKS } from "../plugin-api/constants.js";
 import type { PreModelCallContext } from "../plugin-api/types.js";
+import * as compactModule from "../plugins/defaults/compaction/compact.js";
+import { ContextWindowManager } from "../plugins/defaults/compaction/window-manager.js";
 import { resetPluginRegistryAndRegisterDefaults } from "../plugins/defaults/index.js";
 import {
   getRegisteredPlugins,
@@ -122,6 +141,7 @@ async function runSubscriptionProfile() {
 }
 
 beforeEach(() => {
+  resetCalibrations();
   resetPluginRegistryAndRegisterDefaults();
   subscriptionConnection = `sdk-loop-${randomUUID()}`;
   expect(
@@ -160,6 +180,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  resetCalibrations();
   for (const cleanup of restore.splice(0).reverse()) {
     cleanup();
   }
@@ -171,6 +192,244 @@ afterEach(() => {
 });
 
 describe("AgentLoop Claude SDK dispatch", () => {
+  test("SDK usage calibration triggers the existing next-turn compaction gate", async () => {
+    const { provider, calls } = createMockProvider(
+      [textResponse("Must not use API")],
+      "claude-agent-sdk",
+    );
+    provider.tokenEstimationProvider = "anthropic";
+    const conversationId = `calibration-${randomUUID()}`;
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "context ".repeat(90_000) }],
+      },
+      sdkAnswer,
+      userMessage,
+    ];
+    const contextWindow = {
+      enabled: true,
+      maxInputTokens: 300_000,
+      targetBudgetRatio: 0.3,
+      compactThreshold: 0.8,
+      summaryBudgetRatio: 0.05,
+      overflowRecovery: {
+        enabled: true,
+        safetyMarginRatio: 0.05,
+        maxAttempts: 3,
+        interactiveLatestTurnCompression: "summarize" as const,
+        nonInteractiveLatestTurnCompression: "truncate" as const,
+      },
+    };
+    const manager = new ContextWindowManager({
+      provider,
+      config: contextWindow,
+    });
+    const baseline = estimatePromptTokensWithTools(
+      messages,
+      "System",
+      tools,
+      "anthropic",
+    );
+    expect(baseline).toBeLessThan(210_000);
+    expect(manager.shouldCompact(messages).needed).toBe(false);
+    const compacted: Message[] = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Condensed prior conversation" }],
+      },
+      userMessage,
+    ];
+    const compact = spyOn(compactModule, "defaultCompact").mockImplementation(
+      async () => ({
+        messages: compacted,
+        compacted: true,
+        previousEstimatedInputTokens: 324_000,
+        estimatedInputTokens: 100,
+        maxInputTokens: 300_000,
+        thresholdTokens: 210_000,
+        compactedMessages: 1,
+        compactedPersistedMessages: 1,
+        summaryCalls: 1,
+        summaryInputTokens: 100,
+        summaryOutputTokens: 20,
+        summaryModel: "mock-summary",
+        summaryText: "Condensed prior conversation",
+      }),
+    );
+    restore.push(() => compact.mockRestore());
+    registerPlugin({
+      manifest: { name: "calibration-post-compact", version: "0.0.0" },
+      hooks: {
+        [HOOKS.POST_COMPACT]: async () => {},
+      },
+    });
+    const state = createEventHandlerState();
+    const deps = {
+      ctx: { provider, conversationId },
+      onEvent: (_event: AssistantEvent) => {},
+      rlog: { warn: () => {} },
+    } as unknown as EventHandlerDeps;
+    const realSdk = sdkRuntime.runClaudeSdkAgent;
+    const inputs: Message[][] = [];
+    const sdkErrors: Error[] = [];
+    let queries = 0;
+    const runtime = mockRuntime(async (options) => {
+      inputs.push(
+        structuredClone(options.canonicalMessages ?? options.run.messages),
+      );
+      const output = await realSdk({
+        ...options,
+        conversationDir: null,
+        preflight: async ({ executablePath, env }) => ({
+          ok: true,
+          executablePath,
+          env: env ?? {},
+        }),
+        query: ({ prompt }) => ({
+          close() {},
+          interrupt: async () => undefined,
+          setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
+          async *[Symbol.asyncIterator]() {
+            await prompt[Symbol.asyncIterator]().next();
+            queries += 1;
+            const uuid = "00000000-0000-4000-8000-000000000001";
+            const usage: SDKResultSuccess["usage"] = {
+              input_tokens: 20_000,
+              output_tokens: 5,
+              cache_creation_input_tokens: 4_000,
+              cache_read_input_tokens: 300_000,
+              cache_creation: {
+                ephemeral_5m_input_tokens: 0,
+                ephemeral_1h_input_tokens: 0,
+              },
+              server_tool_use: {
+                web_search_requests: 0,
+                web_fetch_requests: 0,
+              },
+              service_tier: "standard",
+              inference_geo: "not_available",
+              iterations: [],
+              speed: "standard",
+            };
+            const stream = (
+              event: Extract<SDKMessage, { type: "stream_event" }>["event"],
+            ): SDKMessage => ({
+              type: "stream_event",
+              event,
+              uuid,
+              session_id: uuid,
+              parent_tool_use_id: null,
+            });
+            yield stream({
+              type: "message_start",
+              message: {
+                id: `sample-${queries}`,
+                type: "message",
+                role: "assistant",
+                model: "sonnet",
+                content: [],
+                usage,
+                stop_reason: null,
+                stop_sequence: null,
+                container: null,
+                context_management: null,
+                stop_details: null,
+              },
+            });
+            yield stream({
+              type: "content_block_start",
+              index: 0,
+              content_block: {
+                type: "text",
+                text: "Offline answer",
+                citations: [],
+              },
+            });
+            yield stream({ type: "content_block_stop", index: 0 });
+            yield stream({
+              type: "message_delta",
+              context_management: null,
+              delta: {
+                stop_reason: "end_turn",
+                stop_sequence: null,
+                container: null,
+                stop_details: null,
+              },
+              usage,
+            });
+            yield stream({ type: "message_stop" });
+            yield {
+              type: "result",
+              subtype: "success",
+              duration_ms: 1,
+              duration_api_ms: 1,
+              is_error: false,
+              num_turns: 1,
+              result: "Offline answer",
+              stop_reason: "end_turn",
+              total_cost_usd: 0,
+              usage,
+              modelUsage: {},
+              permission_denials: [],
+              uuid,
+              session_id: uuid,
+            } satisfies SDKResultSuccess;
+          },
+        }),
+      });
+      if (output.error) {
+        sdkErrors.push(output.error);
+      }
+      return output;
+    });
+    const loop = new AgentLoop({
+      provider,
+      systemPrompt: "System",
+      conversationId,
+      tools,
+    });
+    const events: string[] = [];
+    const run = {
+      ...baseRun,
+      messages,
+      overrideProfile: "subscription-profile",
+      compactInPlace: true,
+      modelProfileKey: "subscription-profile",
+      resolveContextWindow: () => contextWindow,
+      onEvent: async (event: Parameters<AgentLoopRunOptions["onEvent"]>[0]) => {
+        events.push(event.type);
+        if (event.type === "usage") {
+          await dispatchAgentEvent(state, deps, event);
+        }
+      },
+    };
+    const first = await loop.run(run);
+    expect(sdkErrors).toEqual([]);
+    expect(runtime).toHaveBeenCalledTimes(1);
+    expect(compact).not.toHaveBeenCalled();
+    expect(state.exchangeInputTokens).toBe(324_000);
+    expect(state.exchangeLlmCallCount).toBe(1);
+    expect(state.exchangeCacheReadInputTokens).toBe(300_000);
+    expect(getCorrection("anthropic", "")).toBeCloseTo(324_000 / baseline);
+    const next = [...first.history, userMessage];
+    expect(manager.shouldCompact(next).needed).toBe(true);
+    await loop.run({
+      ...run,
+      messages: next,
+      requestId: "next-calibrated-turn",
+    });
+    expect(sdkErrors).toEqual([]);
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(runtime).toHaveBeenCalledTimes(2);
+    expect(queries).toBe(2);
+    expect(inputs[1]).toEqual(compacted);
+    expect(
+      events.filter((type) => type === "compaction_completed"),
+    ).toHaveLength(1);
+    expect(calls).toHaveLength(0);
+  });
+
   test("a missing explicit connection fails before either SDK inference path", async () => {
     const missing = `missing-sdk-${randomUUID()}`;
     patchSubscriptionProfile({ provider_connection: missing });
@@ -446,6 +705,11 @@ describe("AgentLoop Claude SDK dispatch", () => {
     expect(dispatched.maxTokens).toBe(4096);
     expect(dispatched.effort).toBe("high");
     expect(dispatched.systemPrompt).toContain("Assistant system prompt");
+    expect(dispatched.tokenEstimation).toEqual({
+      systemPrompt: "Assistant system prompt",
+      providerName: "anthropic",
+      model: provider.defaultModel,
+    });
     expect(result.newMessages).toEqual([sdkAnswer]);
   });
 

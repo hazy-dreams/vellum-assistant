@@ -76,6 +76,7 @@ import type {
   CheckpointDecision,
   CheckpointInfo,
 } from "../agent/loop.js";
+import { recordUsageEstimate } from "../agent/usage-calibration.js";
 import type { InterfaceId } from "../channels/types.js";
 import { resolveEffectiveContextWindow } from "../config/llm-context-resolution.js";
 import {
@@ -1268,6 +1269,7 @@ export async function wakeAgentForOpportunity(
       // Normal user turns record usage via the `dispatchAgentEvent` event handler)
       // Wakes run their own onEvent and bypass it, so record here.
       if (event.type === "usage") {
+        recordUsageEstimate(conversation.provider, event);
         try {
           recordUsage(
             {

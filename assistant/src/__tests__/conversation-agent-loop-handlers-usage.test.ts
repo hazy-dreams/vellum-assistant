@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { AgentEvent } from "../agent/loop.js";
 import type { AssistantEvent } from "../api/index.js";
+import {
+  getCorrection,
+  resetCalibrations,
+} from "../context/estimator-calibration.js";
 import {
   createEventHandlerState,
   dispatchAgentEvent,
@@ -13,7 +17,10 @@ function usageFixture() {
   const deps = {
     ctx: {
       conversationId: "conversation-usage-count",
-      provider: { name: "claude-agent-sdk" },
+      provider: {
+        name: "claude-agent-sdk",
+        tokenEstimationProvider: "anthropic",
+      },
     },
     onEvent: (event: AssistantEvent) => sent.push(event),
     rlog: { warn: () => {} },
@@ -31,7 +38,37 @@ function usageFixture() {
   return { state: createEventHandlerState(), deps, event, sent };
 }
 
+beforeEach(resetCalibrations);
+afterEach(resetCalibrations);
+
 describe("agent loop usage call counts", () => {
+  test("usage trains the canonical provider estimator without double-counting cached input", async () => {
+    const { state, deps, event } = usageFixture();
+    await dispatchAgentEvent(state, deps, {
+      ...event,
+      inputTokens: 324_000,
+      estimatedInputTokens: 180_000,
+      cacheReadInputTokens: 300_000,
+      cacheCreationInputTokens: 4_000,
+    });
+    expect(getCorrection("anthropic", "")).toBeCloseTo(1.8);
+    expect(getCorrection("claude-agent-sdk", "")).toBe(1);
+    expect(state.exchangeInputTokens).toBe(324_000);
+    expect(state.exchangeLlmCallCount).toBe(1);
+  });
+
+  test("aggregate usage cannot train one prompt's estimate", async () => {
+    const { state, deps, event } = usageFixture();
+    await dispatchAgentEvent(state, deps, {
+      ...event,
+      inputTokens: 324_000,
+      estimatedInputTokens: 180_000,
+      llmCallCount: 2,
+    });
+    expect(getCorrection("anthropic", "")).toBe(1);
+    expect(state.exchangeInputTokens).toBe(324_000);
+    expect(state.exchangeLlmCallCount).toBe(2);
+  });
   test("an ordinary usage event defaults to one LLM call", async () => {
     const { state, deps, event, sent } = usageFixture();
     await dispatchAgentEvent(state, deps, event);

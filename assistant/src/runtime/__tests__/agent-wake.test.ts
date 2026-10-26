@@ -18,8 +18,20 @@
  * route captured calls back to the originating conversation's probe arrays.
  */
 
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 
+import {
+  getCorrection,
+  resetCalibrations,
+} from "../../context/estimator-calibration.js";
 import type { DiskPressureStatus } from "../../daemon/disk-pressure-guard.js";
 import { desktopAutomationLease } from "../../desktop/desktop-automation-lease.js";
 import { hasPendingAgentWake } from "../agent-wake-queue.js";
@@ -532,6 +544,10 @@ function makeWakeConversation(options: {
 
   const conversation = {
     conversationId,
+    provider: {
+      name: "claude-agent-sdk",
+      tokenEstimationProvider: "anthropic",
+    },
     ...probe,
     get drainQueueCalls() {
       return probe.drainQueueCalls;
@@ -700,7 +716,10 @@ function makeWakeConversation(options: {
 /** Tagged camera frames the fake conversation's trim resolves against. */
 let wakeSightFrameCaptureTimes = new Map<string, number>();
 
+afterEach(resetCalibrations);
+
 beforeEach(() => {
+  resetCalibrations();
   scheduleRunStatus = undefined;
   wakeOutcomeStamps.length = 0;
   backgroundNotificationCalls.length = 0;
@@ -3247,6 +3266,40 @@ describe("wakeAgentForOpportunity", () => {
     // mislabeled retrospective/consolidation wake rows in llm_request_logs
     // and polluted call-site filtering during prompt diagnostics.
     expect(recordRequestLogCalls[0]?.callSite).toBe("memoryRetrospective");
+  });
+
+  test("wake calibrates per-call input estimates without changing usage accounting", async () => {
+    const conversation = makeWakeConversation({
+      baseline: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      scriptedEvents: [
+        {
+          type: "usage",
+          inputTokens: 324_000,
+          estimatedInputTokens: 180_000,
+          outputTokens: 5,
+          model: "sonnet",
+          actualProvider: "claude-agent-sdk",
+          providerDurationMs: 1,
+          cacheCreationInputTokens: 4_000,
+          cacheReadInputTokens: 300_000,
+        },
+      ],
+    });
+    await wakeAgentForOpportunity(
+      {
+        conversationId: conversation.conversationId,
+        hint: "Continue",
+        source: "unit-test",
+      },
+      { resolveTarget: async () => conversation },
+    );
+    expect(getCorrection("anthropic", "")).toBeCloseTo(1.8);
+    expect(getCorrection("claude-agent-sdk", "")).toBe(1);
+    expect(recordUsageCalls).toHaveLength(1);
+    expect(recordUsageCalls[0]).toMatchObject({
+      inputTokens: 324_000,
+      outputTokens: 5,
+    });
   });
 
   test("wake records LLM usage to the cost ledger, attributed to its call site", async () => {
