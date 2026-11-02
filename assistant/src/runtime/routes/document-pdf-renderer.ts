@@ -148,7 +148,10 @@ export async function renderMarkdownToPDF(
 
   const pw = await importPlaywright();
   await ensureChromiumHeadlessShell(pw);
-  const browser = await pw.chromium.launch({ headless: true });
+  const browser = await pw.chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+  });
   try {
     const context = await browser.newContext({
       javaScriptEnabled: false,

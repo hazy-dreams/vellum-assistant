@@ -152,7 +152,8 @@ export type Page = {
     expression: string,
     options?: { timeout?: number },
   ): Promise<unknown>;
-  route(pattern: string, handler: RouteHandler): Promise<void>;
+  // Playwright 1.64 resolves this with a Disposable; callers use unroute().
+  route(pattern: string, handler: RouteHandler): Promise<unknown>;
   unroute(pattern: string, handler?: RouteHandler): Promise<void>;
   bringToFront(): Promise<void>;
   screenshot(options?: {
@@ -185,7 +186,7 @@ type RawPlaywrightPage = {
 
 type LaunchFn = (
   userDataDir: string,
-  options: { headless: boolean },
+  options: { headless: boolean; chromiumSandbox: boolean },
 ) => Promise<BrowserContext>;
 
 let launchPersistentContext: LaunchFn | null = null;
@@ -326,10 +327,13 @@ class BrowserManager {
       const profileDir = getProfileDir();
       mkdirSync(profileDir, { recursive: true });
       const headless = !canDisplayGui();
+      // Playwright disables Chromium's sandbox by default. Local mode visits
+      // untrusted pages, so a launch that cannot sandbox must fail instead.
+      const launchOptions = { headless, chromiumSandbox: true };
 
       let ctx: BrowserContext;
       try {
-        ctx = await launch(profileDir, { headless });
+        ctx = await launch(profileDir, launchOptions);
       } catch (err) {
         // If system Chrome was selected but failed, fall back to Chrome for Testing
         if (findSystemChrome() && !launchPersistentContext) {
@@ -339,9 +343,10 @@ class BrowserManager {
           );
           const pw = await importPlaywright();
           await ensureChromeForTesting(pw);
-          ctx = await pw.chromium.launchPersistentContext(profileDir, {
-            headless,
-          });
+          ctx = await pw.chromium.launchPersistentContext(
+            profileDir,
+            launchOptions,
+          );
         } else {
           throw err;
         }
