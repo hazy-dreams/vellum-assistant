@@ -6,6 +6,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import type { ToolDefinition } from "../../providers/types.js";
+import { toToolInputSchema } from "../../tools/shared/zod-tool-schema.js";
+import {
+  prepareBuiltinShellInput,
+  shellInputSchema,
+} from "../../tools/terminal/shell-input.js";
 import {
   type ClaudeSdkToolBridge,
   type ClaudeSdkToolBridgeOptions,
@@ -583,4 +588,62 @@ describe("Claude SDK Vellum tool bridge", () => {
     });
     expect(seen).toBe(true);
   });
+});
+
+describe("credential compatibility preserves native raw provenance", () => {
+  const canonical = {
+    command: "echo fixture",
+    credential_ids: ["fixture/token"],
+  };
+  const encoded = {
+    ...canonical,
+    credential_ids: JSON.stringify(canonical.credential_ids),
+  };
+  const bashDefinition = {
+    name: "bash",
+    description: "fixture",
+    input_schema: toToolInputSchema(shellInputSchema),
+  } as ToolDefinition;
+  for (const raw of [canonical, encoded]) {
+    test(`raw hook and MCP input must match before compatibility: ${typeof raw.credential_ids}`, async () => {
+      const seen: Record<string, unknown>[] = [];
+      const lifecycle: unknown[] = [];
+      const { bridge, client } = await setup({
+        tools: [bashDefinition],
+        toolExecutor: async (_name, input) => {
+          const prepared = prepareBuiltinShellInput("bash", input, {
+            kind: "default",
+          });
+          if (!prepared.ok) {
+            return { content: prepared.message, isError: true };
+          }
+          seen.push(prepared.data);
+          return { content: "fixture", isError: false };
+        },
+        onToolStart: (call) => {
+          lifecycle.push(structuredClone(call.input));
+        },
+      });
+      const before = structuredClone(raw);
+      await authorize(bridge, "credential-call", raw, {
+        tool_name: "mcp__vellum__bash",
+      });
+      const mismatch =
+        typeof raw.credential_ids === "string" ? canonical : encoded;
+      expect(
+        (await invoke(client, "credential-call", mismatch, "bash")).isError,
+      ).toBe(true);
+      expect(seen).toHaveLength(0);
+      expect(
+        (await invoke(client, "credential-call", raw, "bash")).isError,
+      ).toBe(false);
+      expect(seen).toEqual([canonical]);
+      expect(lifecycle).toEqual([raw]);
+      expect(raw).toEqual(before);
+      expect(
+        (await invoke(client, "credential-call", raw, "bash")).isError,
+      ).toBe(false);
+      expect(seen).toHaveLength(1);
+    });
+  }
 });

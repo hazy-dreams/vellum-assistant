@@ -13,7 +13,7 @@ import { hostShellInputSchema } from "./host-terminal/host-shell.js";
 import { formatToolInputError } from "./shared/zod-tool-schema.js";
 import { notifyParentInputSchema } from "./subagent/notify-parent.js";
 import { requestSystemPermissionInputSchema } from "./system/request-permission.js";
-import { shellInputSchema } from "./terminal/shell.js";
+import { shellInputSchema } from "./terminal/shell-input.js";
 import { watchRetroReportInputSchema } from "./watch/watch-retro-report.js";
 
 /**
@@ -38,7 +38,9 @@ import { watchRetroReportInputSchema } from "./watch/watch-retro-report.js";
  *
  * - Top-level schemas are `z.looseObject` — unknown keys (including the
  *   injected `activity` field, see `schema-transforms.ts`) pass through.
- * - A field the tool silently ignores when malformed gets
+ * - Authorization-bearing credential references must fail closed; built-in
+ *   bash is prepared before classification and approval identity as well.
+ * - Other fields the tool silently ignores when malformed get
  *   `.optional().catch(undefined)` so a bad value degrades exactly as the
  *   tool always degraded, instead of failing the call.
  * - Fields the advertised schema requires only to guide the model (e.g.

@@ -1,8 +1,30 @@
+import * as childProcess from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+
+// Never spawn a real process or connect to a proxy in credential tests.
+const spawn = mock(() => {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: () => boolean;
+  };
+  child.pid = 424242;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  queueMicrotask(() => {
+    child.emit("spawn");
+    child.emit("close", 0, null);
+  });
+  return child;
+});
+mock.module("node:child_process", () => ({ ...childProcess, spawn }));
 
 // Mock registry
 mock.module("../tools/registry.js", () => ({
@@ -66,6 +88,7 @@ beforeEach(() => {
   _setMetadataPath(META_PATH);
   mockGetOrStartSession.mockClear();
   mockGetSessionEnv.mockClear();
+  spawn.mockClear();
 });
 
 afterAll(() => {
@@ -286,5 +309,99 @@ describe("shell tool credential ref resolution", () => {
     expect(result.content).toContain("not bash");
     // Must not call getOrStartSession — even one denied credential blocks the whole command
     expect(mockGetOrStartSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("strict credential compatibility preserves shell policy", () => {
+  const base = { command: "echo fixture", network_mode: "proxied" };
+  for (const encode of [false, true]) {
+    const shape = (refs: unknown[]) => (encode ? JSON.stringify(refs) : refs);
+    test(`allowed refs reach the same proxy set and fake spawn: encoded=${encode}`, async () => {
+      const meta = upsertCredentialMetadata("fixture", "token", {
+        allowedTools: ["bash"],
+      });
+      const result = await shellTool.execute(
+        {
+          ...base,
+          credential_ids: shape(["fixture/token", meta.credentialId]),
+        },
+        ctx,
+      );
+      expect(result.isError).toBe(false);
+      expect(mockGetOrStartSession.mock.calls[0][1]).toEqual([
+        meta.credentialId,
+      ]);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+    for (const allowedTools of [[], ["publish_page"], ["*"]]) {
+      test(`disallowed metadata rejects whole call: ${JSON.stringify(allowedTools)}, encoded=${encode}`, async () => {
+        upsertCredentialMetadata("fixture", "token", {
+          allowedTools: ["bash"],
+        });
+        upsertCredentialMetadata("denied", "token", { allowedTools });
+        const result = await shellTool.execute(
+          { ...base, credential_ids: shape(["fixture/token", "denied/token"]) },
+          ctx,
+        );
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain("credential tool policy denied");
+        expect(mockGetOrStartSession).not.toHaveBeenCalled();
+        expect(spawn).not.toHaveBeenCalled();
+      });
+    }
+    test(`unknown refs reject whole call: encoded=${encode}`, async () => {
+      upsertCredentialMetadata("fixture", "token", { allowedTools: ["bash"] });
+      const result = await shellTool.execute(
+        { ...base, credential_ids: shape(["fixture/token", "missing/token"]) },
+        ctx,
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("unknown credential reference");
+      expect(mockGetOrStartSession).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    });
+    test(`empty list never discovers existing credentials: encoded=${encode}`, async () => {
+      upsertCredentialMetadata("fixture", "token", { allowedTools: ["bash"] });
+      const result = await shellTool.execute(
+        { ...base, credential_ids: shape([]) },
+        ctx,
+      );
+      expect(result.isError).toBe(false);
+      expect(mockGetOrStartSession.mock.calls[0][1]).toEqual([]);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+    test(`network off does not start a proxy: encoded=${encode}`, async () => {
+      const result = await shellTool.execute(
+        {
+          ...base,
+          network_mode: "off",
+          credential_ids: shape(["missing/token"]),
+        },
+        ctx,
+      );
+      expect(result.isError).toBe(false);
+      expect(mockGetOrStartSession).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+  }
+  for (const credential_ids of [
+    '["fixture/token",',
+    '["fixture/token",7]',
+    null,
+    [""],
+    '"fixture/token"',
+  ]) {
+    test(`malformed credentials never start proxy or process: ${JSON.stringify(credential_ids)}`, async () => {
+      const result = await shellTool.execute({ ...base, credential_ids }, ctx);
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("credential_ids");
+      expect(mockGetOrStartSession).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  }
+  test("omission does not discover existing credentials", async () => {
+    upsertCredentialMetadata("fixture", "token", { allowedTools: ["bash"] });
+    expect((await shellTool.execute(base, ctx)).isError).toBe(false);
+    expect(mockGetOrStartSession.mock.calls[0][1]).toEqual([]);
   });
 });

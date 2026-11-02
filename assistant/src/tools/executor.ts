@@ -73,6 +73,18 @@ export class ToolExecutor {
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
     const startTime = Date.now();
+    // Compatibility decoding and strict validation happen before the ONE
+    // classification, approval digest, prompt, grant consumption or execution.
+    const prepared = this.approvalHandler.prepareInput(
+      name,
+      input,
+      context,
+      startTime,
+    );
+    if (!prepared.ok) {
+      return { content: prepared.message, isError: true };
+    }
+    input = prepared.data;
     let decision = "allow";
     // The invocation's one classification, taken before the gates so every
     // audit row this call can produce (gate denial, gate error, grant-consumed

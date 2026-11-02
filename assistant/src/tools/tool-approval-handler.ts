@@ -45,11 +45,13 @@ import { safeTimeoutMs } from "./execution-timeout.js";
 import { channelCoordinatesFromToolContext } from "./policy-context.js";
 import { getAllTools, getTool, getToolOwner } from "./registry.js";
 import { isSideEffectTool } from "./side-effects.js";
+import { prepareBuiltinShellInput } from "./terminal/shell-input.js";
 import { parseToolInput } from "./tool-input-schemas.js";
 import { summarizeToolInput } from "./tool-input-summary.js";
 import { suggestToolName } from "./tool-name-aliases.js";
 import { recordToolCompletion } from "./tool-profiler.js";
 import type { ExecutionTarget } from "./tool-types.js";
+import { RISK_LEVEL_UNCLASSIFIED } from "./tool-types.js";
 import {
   type OwnerInfo,
   survivesDiskPressureCleanup,
@@ -748,6 +750,32 @@ export class ToolApprovalHandler {
     recordToolCompletion(context.conversationId, name, durationMs, true);
   }
 
+  /** Validate bash before any argument-sensitive risk or approval decision. */
+  prepareInput(
+    name: string,
+    input: Record<string, unknown>,
+    context: ToolContext,
+    startTime: number,
+    riskLevel: string = RISK_LEVEL_UNCLASSIFIED,
+  ) {
+    // Preserve the existing cancellation and raw-JSON-marker error paths.
+    if (context.signal?.aborted || isUnparseableToolArgs(input)) {
+      return { ok: true as const, data: input };
+    }
+    const parsed = prepareBuiltinShellInput(name, input, getToolOwner(name));
+    if (!parsed.ok) {
+      this.auditGateError(
+        context,
+        name,
+        input,
+        riskLevel,
+        startTime,
+        parsed.message,
+      );
+    }
+    return parsed;
+  }
+
   /** Audit a gate that blocked the invocation (deterministic, no user prompt). */
   private auditGateDenied(
     context: ToolContext,
@@ -808,6 +836,23 @@ export class ToolApprovalHandler {
       );
       return { allowed: false, result: { content: msg, isError: true } };
     }
+
+    // Direct callers of this gate use the same canonical input as the
+    // executor. Idempotent when the executor already prepared it.
+    const prepared = this.prepareInput(
+      name,
+      input,
+      context,
+      startTime,
+      riskLevel,
+    );
+    if (!prepared.ok) {
+      return {
+        allowed: false,
+        result: { content: prepared.message, isError: true },
+      };
+    }
+    input = prepared.data;
 
     // Reject tool invocations targeting guardian control-plane endpoints from non-guardian actors.
     const guardianCheck = enforceVerificationControlPlanePolicy(

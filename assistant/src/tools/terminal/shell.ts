@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
 
-import { z } from "zod";
-
 import type { BackgroundToolCompletedEvent } from "../../api/events/background-tool-completed.js";
 import { getConfig } from "../../config/loader.js";
 import { RiskLevel } from "../../permissions/types.js";
@@ -49,6 +47,9 @@ import type {
   ToolExecutionResult,
 } from "../types.js";
 import { buildSanitizedEnv } from "./safe-env.js";
+import { shellInputSchema } from "./shell-input.js";
+
+export { shellInputSchema } from "./shell-input.js";
 
 /** Build a credential ref resolution trace for diagnostic logging. */
 function buildCredentialRefTrace(
@@ -60,55 +61,6 @@ function buildCredentialRefTrace(
 }
 
 const log = getLogger("shell-tool");
-
-/**
- * Model-input schema, the single source for both runtime validation (via
- * `TOOL_INPUT_SCHEMAS`) and the advertised `input_schema` below. Optional
- * fields catch to `undefined` so a malformed value degrades to its
- * default: `timeout_seconds` falls back to the configured
- * default (it is also read defensively pre-execution by
- * `computePerToolTimeoutMs`), `network_mode` falls back to "off" (the
- * `=== "proxied"` coercion), `background` to foreground (the `=== true`
- * coercion), `credential_ids` to none, and `activity` is status-only.
- */
-export const shellInputSchema = z.looseObject({
-  command: z.string().min(1).describe("The shell command to execute"),
-  activity: z
-    .string()
-    .describe(
-      'Brief non-technical explanation of what this command does and why, shown to a non-technical user in the permission prompt. Avoid jargon and technical terms. Good: "to check if a required program is installed on your computer". Bad: "to check if gcloud CLI is installed". Good: "to download a helper program". Bad: "to run npm install".',
-    )
-    .optional()
-    .catch(undefined),
-  timeout_seconds: z
-    .number()
-    .describe(
-      "Optional timeout in seconds. Defaults to the configured default (120s). Cannot exceed the configured maximum.",
-    )
-    .optional()
-    .catch(undefined),
-  network_mode: z
-    .enum(["off", "proxied"])
-    .describe(
-      'Network access mode for the command. "off" (default) blocks network access; "proxied" routes traffic through the credential proxy.',
-    )
-    .optional()
-    .catch(undefined),
-  credential_ids: z
-    .array(z.string())
-    .describe(
-      'Optional list of credential IDs to inject via the proxy when network_mode is "proxied".',
-    )
-    .optional()
-    .catch(undefined),
-  background: z
-    .boolean()
-    .describe(
-      "Run the command in the background. The tool returns immediately with a background tool ID. When the process exits, its output is delivered to the conversation as a wake.",
-    )
-    .optional()
-    .catch(undefined),
-});
 
 export const shellTool = {
   name: "bash",

@@ -15,8 +15,10 @@
  *   3. Guardian auto-allow path remains unchanged.
  *   4. Grants are revoked on call end (controller.destroy).
  */
-
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+
+import { registerTool } from "../tools/registry.js";
+import { shellTool } from "../tools/terminal/shell.js";
 
 // ── Platform + logger mocks (must come before any source imports) ────
 
@@ -492,4 +494,61 @@ describe("voice bridge confirmation handling (grant consumption via primitive)",
       .all();
     expect(otherActive.length).toBe(1);
   });
+});
+
+describe("voice secondary consumer uses canonical credential input", () => {
+  beforeEach(() => {
+    clearTables();
+    registerTool(shellTool);
+  });
+  const canonical = {
+    command: "echo fixture",
+    network_mode: "proxied",
+    credential_ids: ["fixture/token"],
+  };
+  for (const credential_ids of [
+    ["fixture/token"],
+    '["fixture/token"]',
+    '["fixture/token",7]',
+  ]) {
+    test(`consumes only valid canonical input: ${JSON.stringify(credential_ids)}`, async () => {
+      const grant = createScopedApprovalGrant(
+        grantParams({
+          toolName: "bash",
+          inputDigest: computeToolApprovalDigest("bash", canonical),
+        }),
+      );
+      const raw = { ...canonical, credential_ids };
+      const before = structuredClone(raw);
+      const data = createMockSession({ toolName: "bash", toolInput: raw });
+      setupBridgeDeps(() => data.session);
+      await startVoiceTurn({
+        conversationId: CONVERSATION_ID,
+        callSessionId: CALL_SESSION_ID,
+        content: "fixture",
+        assistantId: ASSISTANT_ID,
+        trustContext: {
+          sourceChannel: "phone",
+          trustClass: "trusted_contact",
+          requesterExternalUserId: "caller-123",
+        },
+        isInbound: true,
+        onTextDelta: () => {},
+        onComplete: () => {},
+        onError: () => {},
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      const invalid = credential_ids === '["fixture/token",7]';
+      expect(data.getConfirmationDecision()?.decision).toBe(
+        invalid ? "deny" : "allow",
+      );
+      const row = getDb()
+        .select()
+        .from(scopedApprovalGrants)
+        .where(eq(scopedApprovalGrants.id, grant.id))
+        .get();
+      expect(row?.status).toBe(invalid ? "active" : "consumed");
+      expect(raw).toEqual(before);
+    });
+  }
 });

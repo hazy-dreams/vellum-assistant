@@ -1,4 +1,12 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 
 import {
   installThresholdReaderMock,
@@ -1385,6 +1393,111 @@ describe("ToolApprovalHandler / unparseable tool args gate", () => {
     );
 
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe("built-in bash canonical credential grants", () => {
+  const handler = new ToolApprovalHandler();
+  const canonical = {
+    command: "echo fixture",
+    network_mode: "proxied",
+    credential_ids: ["fixture/token"],
+  };
+  const encoded = {
+    ...canonical,
+    credential_ids: JSON.stringify(canonical.credential_ids),
+  };
+  beforeEach(() => {
+    clearTables();
+    resetAuditCalls();
+    resetThresholdReaderMock();
+    toolOwners.bash = { kind: "default", id: "default" };
+  });
+  afterEach(() => {
+    delete toolOwners.bash;
+  });
+  function mint(input: Record<string, unknown>, requestScoped = false) {
+    const result = mintGrantFromDecision(
+      mintParams({
+        scopeMode: requestScoped ? "request_id" : "tool_signature",
+        requestId: requestScoped ? "req-1" : undefined,
+        toolName: "bash",
+        inputDigest: computeToolApprovalDigest("bash", input),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    return result;
+  }
+  function states() {
+    return getDb()
+      .select()
+      .from(scopedApprovalGrants)
+      .all()
+      .map((r) => r.status);
+  }
+  async function check(input: Record<string, unknown>) {
+    return handler.checkPreExecutionGates(
+      "bash",
+      input,
+      makeContext({ trustClass: "unknown" }),
+      "high",
+      Date.now(),
+    );
+  }
+  for (const input of [canonical, encoded]) {
+    test(`canonical approval consumes exactly once for ${typeof input.credential_ids}`, async () => {
+      mint(canonical);
+      const before = structuredClone(input);
+      const result = await check(input);
+      expect(result.allowed).toBe(true);
+      if (!result.allowed) {
+        throw new Error(result.result.content);
+      }
+      expect(result.grantConsumed).toBe(true);
+      expect(result.parsedInput).toEqual(canonical);
+      expect(states()).toEqual(["consumed"]);
+      expect((await check(input)).allowed).toBe(false);
+      expect(states()).toEqual(["consumed"]);
+      expect(auditCalls.denied[0].input).toEqual(canonical);
+      expect(input).toEqual(before);
+    });
+  }
+  for (const requestScoped of [false, true]) {
+    test(`malformed input cannot burn ${requestScoped ? "request" : "signature"} grant or consult permissions`, async () => {
+      mint(canonical, requestScoped);
+      const result = await check({
+        ...canonical,
+        credential_ids: '["fixture/token",7]',
+      });
+      expect(result.allowed).toBe(false);
+      if (result.allowed) {
+        throw new Error("unexpected allow");
+      }
+      expect(result.result.content).toContain("credential_ids");
+      expect(states()).toEqual(["active"]);
+      expect(auditCalls.denied).toHaveLength(0);
+      expect(auditCalls.error).toHaveLength(1);
+      expect(thresholdReaderMock.cellLookups).toBe(0);
+      expect((await check(canonical)).allowed).toBe(true);
+    });
+  }
+  test("approval without credentials does not authorize adding credentials", async () => {
+    mint({ command: canonical.command, network_mode: "proxied" });
+    expect((await check(encoded)).allowed).toBe(false);
+    expect(states()).toEqual(["active"]);
+  });
+  test("changing a credential reference does not match the approval", async () => {
+    mint(canonical);
+    expect(
+      (await check({ ...encoded, credential_ids: '["fixture/other"]' }))
+        .allowed,
+    ).toBe(false);
+    expect(states()).toEqual(["active"]);
+  });
+  test("unknown tool ownership does not inherit built-in parsing", async () => {
+    toolOwners.bash = { kind: "workspace", id: "override" };
+    mint(encoded);
+    expect((await check(encoded)).allowed).toBe(true);
   });
 });
 

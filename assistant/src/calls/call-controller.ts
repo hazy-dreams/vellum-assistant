@@ -25,6 +25,8 @@ import type {
 import type { TrustContext } from "../daemon/trust-context-types.js";
 import { DAEMON_INTERNAL_ASSISTANT_ID } from "../runtime/assistant-scope.js";
 import { computeToolApprovalDigest } from "../security/tool-approval-digest.js";
+import { getToolOwner } from "../tools/registry.js";
+import { prepareBuiltinShellInput } from "../tools/terminal/shell-input.js";
 import { getCatalogProvider } from "../tts/provider-catalog.js";
 import { createReasoningTagFilter } from "../tts/reasoning-tag-filter.js";
 import { extractSpeakableSegments } from "../tts/speakable-segments.js";
@@ -1946,6 +1948,7 @@ export class CallController {
     // `}]` inside JSON string values does not truncate the payload or
     // leak partial JSON into TTS output.
     const approvalMatch = extractBalancedJson(responseText);
+    let rejectedToolInput = false;
     let toolApprovalMeta: {
       question: string;
       toolName: string;
@@ -1959,9 +1962,20 @@ export class CallController {
           input?: Record<string, unknown>;
         };
         if (parsed.question && parsed.toolName && parsed.input) {
-          const digest = computeToolApprovalDigest(
+          const prepared = prepareBuiltinShellInput(
             parsed.toolName,
             parsed.input,
+            getToolOwner(parsed.toolName),
+          );
+          if (!prepared.ok) {
+            // Rejected tool input cannot become an informational consultation,
+            // including a marker embedded inside the rejected JSON's question.
+            rejectedToolInput = true;
+            throw new Error(prepared.message);
+          }
+          const digest = computeToolApprovalDigest(
+            parsed.toolName,
+            prepared.data,
           );
           toolApprovalMeta = {
             question: parsed.question,
@@ -1977,9 +1991,10 @@ export class CallController {
       }
     }
 
-    const askMatch = toolApprovalMeta
-      ? null // structured approval takes precedence
-      : responseText.match(ASK_GUARDIAN_CAPTURE_REGEX);
+    const askMatch =
+      toolApprovalMeta || rejectedToolInput
+        ? null // valid structured approval takes precedence; rejected input stops
+        : responseText.match(ASK_GUARDIAN_CAPTURE_REGEX);
 
     const questionText =
       toolApprovalMeta?.question ?? (askMatch ? askMatch[1] : null);

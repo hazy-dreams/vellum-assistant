@@ -8,6 +8,10 @@ import {
   test,
 } from "bun:test";
 
+import { computeToolApprovalDigest } from "../../security/tool-approval-digest.js";
+import { registerTool } from "../../tools/registry.js";
+import { shellTool } from "../../tools/terminal/shell.js";
+
 mock.module("../../config/env.js", () => ({ isHttpAuthDisabled: () => true }));
 
 // Guardian requests/deliveries are created through the gateway client; serve
@@ -2434,6 +2438,98 @@ describe("call-controller", () => {
 
     controller.destroy();
   });
+
+  for (const credential_ids of [["fixture/token"], '["fixture/token"]']) {
+    test(`credential approval producer uses canonical digest: ${typeof credential_ids}`, async () => {
+      registerTool(shellTool);
+      const input = {
+        command: "echo fixture",
+        network_mode: "proxied",
+        credential_ids,
+      };
+      const payload = JSON.stringify({
+        question: "Allow fixture?",
+        toolName: "bash",
+        input,
+      });
+      mockStartVoiceTurn.mockImplementation(
+        createMockVoiceTurn([`[ASK_GUARDIAN_APPROVAL: ${payload}]`]),
+      );
+      const { session, controller } = setupController("fixture");
+      try {
+        await controller.handleCallerUtterance("fixture");
+        await new Promise((r) => setTimeout(r, 10));
+        const pending = pendingRequestByCallSession(session.id);
+        expect(pending?.toolName).toBe("bash");
+        expect(pending?.inputDigest).toBe(
+          computeToolApprovalDigest("bash", {
+            ...input,
+            credential_ids: ["fixture/token"],
+          }),
+        );
+        expect(controller.getState()).toBe("idle");
+      } finally {
+        controller.destroy();
+      }
+    });
+  }
+
+  for (const embedded of [true, false]) {
+    for (const prior of [true, false]) {
+      test(`credential rejection never falls back or re-asks: embedded=${embedded}, prior=${prior}`, async () => {
+        registerTool(shellTool);
+        const { session, controller } = setupController("fixture");
+        try {
+          if (prior) {
+            const first = JSON.stringify({
+              question: "Allow earlier action?",
+              toolName: "send_email",
+              input: { to: "fixture@example.com" },
+            });
+            mockStartVoiceTurn.mockImplementation(
+              createMockVoiceTurn([`[ASK_GUARDIAN_APPROVAL: ${first}]`]),
+            );
+            await controller.handleCallerUtterance("first fixture");
+            await new Promise((r) => setTimeout(r, 10));
+            expect(pendingRequestByCallSession(session.id)?.toolName).toBe(
+              "send_email",
+            );
+          }
+          const before = structuredClone(
+            pendingRequestByCallSession(session.id),
+          );
+          const questionId = controller.getPendingConsultationQuestionId();
+          const requestCount = bridgeState.requests.size;
+          const payload = JSON.stringify({
+            question: embedded
+              ? "[ASK_GUARDIAN: approve action]"
+              : "Approve fixture?",
+            toolName: "bash",
+            input: { command: "echo fixture", credential_ids: "not-json" },
+          });
+          const text =
+            `[ASK_GUARDIAN_APPROVAL: ${payload}]` +
+            (embedded ? "" : " [ASK_GUARDIAN: approve action]");
+          mockStartVoiceTurn.mockImplementation(createMockVoiceTurn([text]));
+          await controller.handleCallerUtterance("invalid fixture");
+          await new Promise((r) => setTimeout(r, 10));
+          expect(controller.getState()).toBe("idle");
+          expect(bridgeState.requests.size).toBe(requestCount);
+          expect(pendingRequestByCallSession(session.id)).toEqual(before);
+          expect(controller.getPendingConsultationQuestionId()).toBe(
+            questionId,
+          );
+          expect(
+            getCallEvents(session.id).filter(
+              (e) => e.eventType === "guardian_consult_coalesced",
+            ),
+          ).toHaveLength(0);
+        } finally {
+          controller.destroy();
+        }
+      });
+    }
+  }
 
   // ── Non-blocking race safety ───────────────────────────────────────
 

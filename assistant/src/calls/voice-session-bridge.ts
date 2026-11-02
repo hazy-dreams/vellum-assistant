@@ -65,7 +65,8 @@ import { publishConversationMessagesChanged } from "../runtime/sync/resource-syn
 import { computeToolApprovalDigest } from "../security/tool-approval-digest.js";
 import { sttCatalogKeyForRole } from "../stt/roles.js";
 import type { SubagentParentNotification } from "../subagent/parent-notification.js";
-import { getAllTools } from "../tools/registry.js";
+import { getAllTools, getToolOwner } from "../tools/registry.js";
+import { prepareBuiltinShellInput } from "../tools/terminal/shell-input.js";
 import { sensitiveToolReach } from "../tools/tool-approval-handler.js";
 import { createAbortReason } from "../util/abort-reasons.js";
 import { getLogger } from "../util/logger.js";
@@ -1635,9 +1636,17 @@ export async function startVoiceTurn(
         // (maxWaitMs: 0) since the primary retry path is in the pre-exec
         // gate; this secondary path just needs a quick check.
         try {
-          const inputDigest = computeToolApprovalDigest(
+          const prepared = prepareBuiltinShellInput(
             msg.toolName,
             msg.input,
+            getToolOwner(msg.toolName),
+          );
+          if (!prepared.ok) {
+            throw new Error(prepared.message);
+          }
+          const inputDigest = computeToolApprovalDigest(
+            msg.toolName,
+            prepared.data,
           );
           const consumeResult = await consumeGrantForInvocation(
             {

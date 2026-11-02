@@ -62,16 +62,21 @@ let classificationOverride:
     }
   | undefined;
 
+const classificationInputs: Record<string, unknown>[] = [];
+
 mock.module("../permissions/checker.js", () => ({
   isDynamicSkillLoadInvocation: () => false,
-  classifyRisk: async () => ({
-    level: classificationOverride?.riskLevel ?? "low",
-    reason: classificationOverride?.reason,
-    scopeOptions: classificationOverride?.scopeOptions ?? [],
-    allowlistOptions: classificationOverride?.allowlistOptions,
-    directoryScopeOptions: classificationOverride?.directoryScopeOptions,
-    matchType: classificationOverride?.matchType ?? "unknown",
-  }),
+  classifyRisk: async (_name: string, input: Record<string, unknown>) => {
+    classificationInputs.push(structuredClone(input));
+    return {
+      level: classificationOverride?.riskLevel ?? "low",
+      reason: classificationOverride?.reason,
+      scopeOptions: classificationOverride?.scopeOptions ?? [],
+      allowlistOptions: classificationOverride?.allowlistOptions,
+      directoryScopeOptions: classificationOverride?.directoryScopeOptions,
+      matchType: classificationOverride?.matchType ?? "unknown",
+    };
+  },
   check: async (
     toolName: string,
     input: Record<string, unknown>,
@@ -93,8 +98,11 @@ mock.module("../permissions/checker.js", () => ({
 
 // Mock every export so downstream test files that dynamically import modules
 // with a static `from "../telemetry/tool-usage-store.js"` still see all symbols.
+const auditRecords: Array<{ input: string; decision: string }> = [];
 mock.module("../telemetry/tool-usage-store.js", () => ({
-  recordToolInvocation: () => {},
+  recordToolInvocation: (row: { input: string; decision: string }) => {
+    auditRecords.push(row);
+  },
   getRecentInvocations: () => [],
   rotateToolInvocations: async () => 0,
 }));
@@ -1433,6 +1441,9 @@ describe("ToolExecutor thrown-value rendering", () => {
 describe("ToolExecutor input-schema validation gate", () => {
   beforeEach(() => {
     fakeToolResult = { content: "ok", isError: false };
+    classificationInputs.length = 0;
+    auditRecords.length = 0;
+    lastCheckArgs = undefined;
     getToolOverride = undefined;
     getAllToolsOverride = undefined;
     checkResultOverride = undefined;
@@ -1545,6 +1556,173 @@ describe("ToolExecutor input-schema validation gate", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid input for tool "file_write"');
     expect(result.content).not.toContain("guardian");
+    expect(probe.seenInput()).toBeUndefined();
+  });
+  for (const value of [["fixture/token"], '["fixture/token"]']) {
+    test(`credential compatibility reaches classification, permission and execution identically: ${typeof value}`, async () => {
+      const probe = ownedTool("bash", "default");
+      const raw = {
+        command: "echo fixture",
+        network_mode: "proxied",
+        credential_ids: value,
+      };
+      const before = structuredClone(raw);
+      const result = await new ToolExecutor(makePrompter()).execute(
+        "bash",
+        raw,
+        makeContext(),
+      );
+      const expected = { ...raw, credential_ids: ["fixture/token"] };
+      expect(result.isError).toBe(false);
+      expect(classificationInputs).toEqual([expected]);
+      expect(lastCheckArgs?.input).toEqual(expected);
+      expect(probe.seenInput()).toEqual(expected);
+      expect(auditRecords).toHaveLength(1);
+      expect(JSON.parse(auditRecords[0].input)).toEqual(expected);
+      expect(raw).toEqual(before);
+    });
+  }
+
+  test("invalid credentials stop before classification, prompting or execution", async () => {
+    const probe = ownedTool("bash", "default");
+    const prompt = mock(async () => ({ decision: "allow" as const }));
+    const prompter = makePrompter();
+    prompter.prompt = prompt as typeof prompter.prompt;
+    const result = await new ToolExecutor(prompter).execute(
+      "bash",
+      {
+        command: "echo fixture",
+        network_mode: "proxied",
+        credential_ids: '["fixture/token",7]',
+      },
+      makeContext(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("credential_ids");
+    expect(classificationInputs).toEqual([]);
+    expect(lastCheckArgs).toBeUndefined();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(probe.seenInput()).toBeUndefined();
+  });
+
+  test("workspace bash override does not inherit built-in credential normalization", async () => {
+    const probe = ownedTool("bash", "workspace");
+    const input = {
+      command: "echo fixture",
+      credential_ids: '["fixture/token"]',
+    };
+    const result = await new ToolExecutor(makePrompter()).execute(
+      "bash",
+      input,
+      makeContext(),
+    );
+    expect(result.isError).toBe(false);
+    expect(classificationInputs).toEqual([input]);
+    expect(probe.seenInput()).toEqual(input);
+  });
+
+  for (const decision of ["allow", "deny"] as const) {
+    test(`credential prompt receives canonical args; human ${decision} is preserved`, async () => {
+      const probe = ownedTool("bash", "default");
+      checkResultOverride = {
+        decision: "prompt",
+        reason: "fixture approval required",
+      };
+      const prompt = mock(
+        async (_name: string, _input: Record<string, unknown>) => ({
+          decision,
+        }),
+      );
+      const prompter = makePrompter();
+      prompter.prompt = prompt as unknown as typeof prompter.prompt;
+      const canonical = {
+        command: "echo fixture",
+        network_mode: "proxied",
+        credential_ids: ["fixture/token"],
+      };
+      const result = await new ToolExecutor(prompter).execute(
+        "bash",
+        {
+          ...canonical,
+          credential_ids: JSON.stringify(canonical.credential_ids),
+        },
+        makeContext({ forcePromptSideEffects: true }),
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt.mock.calls[0][1]).toEqual(canonical);
+      expect(classificationInputs).toEqual([canonical]);
+      expect(result.isError).toBe(decision === "deny");
+      expect(probe.seenInput()).toEqual(
+        decision === "allow" ? canonical : undefined,
+      );
+      expect(auditRecords).toHaveLength(1);
+      expect(JSON.parse(auditRecords[0].input)).toEqual(canonical);
+    });
+  }
+
+  test("shell alias normalizes before credential preparation", async () => {
+    const probe = ownedTool("bash", "default");
+    const raw = {
+      cmd: "echo fixture",
+      network_mode: "proxied",
+      credential_ids: '["fixture/token"]',
+    };
+    const result = await new ToolExecutor(makePrompter()).execute(
+      "shell",
+      raw,
+      makeContext({ allowedToolNames: new Set(["bash"]) }),
+    );
+    expect(result.isError).toBe(false);
+    const expected = {
+      command: "echo fixture",
+      network_mode: "proxied",
+      credential_ids: ["fixture/token"],
+    };
+    expect(classificationInputs).toEqual([expected]);
+    expect(lastCheckArgs?.input).toEqual(expected);
+    expect(probe.seenInput()).toEqual(expected);
+    expect(raw.credential_ids).toBe('["fixture/token"]');
+  });
+
+  test("credential preparation does not override explicit policy denial", async () => {
+    const probe = ownedTool("bash", "default");
+    checkResultOverride = {
+      decision: "deny",
+      reason: "fixture explicit denial",
+    };
+    const result = await new ToolExecutor(makePrompter()).execute(
+      "bash",
+      { command: "echo fixture", credential_ids: '["fixture/token"]' },
+      makeContext(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("fixture explicit denial");
+    expect(probe.seenInput()).toBeUndefined();
+  });
+
+  test("cancellation takes precedence over malformed credential input", async () => {
+    const probe = ownedTool("bash", "default");
+    const controller = new AbortController();
+    controller.abort();
+    const result = await new ToolExecutor(makePrompter()).execute(
+      "bash",
+      { command: "echo fixture", credential_ids: "invalid" },
+      makeContext({ signal: controller.signal }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe("Cancelled");
+    expect(probe.seenInput()).toBeUndefined();
+  });
+
+  test("raw unparseable argument marker retains its dedicated error", async () => {
+    const probe = ownedTool("bash", "default");
+    const result = await new ToolExecutor(makePrompter()).execute(
+      "bash",
+      { _raw: '{"command":' },
+      makeContext(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("were not valid JSON");
     expect(probe.seenInput()).toBeUndefined();
   });
 });
