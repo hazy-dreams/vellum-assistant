@@ -149,9 +149,11 @@ import { parentAlias } from "../messaging/providers/slack/render-transcript.js";
 import type { MessageRow } from "../persistence/conversation-crud.js";
 import { getDb } from "../persistence/db-connection.js";
 import { initializeDb } from "../persistence/db-init.js";
+import { readInjectionEnvelope } from "../persistence/injection-envelope.js";
 import { conversations, messages } from "../persistence/schema/index.js";
 import { registerDefaultPluginInjectors } from "../plugins/defaults/index.js";
 import { ConversationGraphMemory } from "../plugins/defaults/memory/graph/conversation-graph-memory.js";
+import { injectionMetadataUpdates } from "../plugins/defaults/memory/hooks/injection-metadata.js";
 import postCompact from "../plugins/defaults/memory/hooks/post-compact.js";
 import { wrapMemoryPointerBlock } from "../plugins/defaults/memory/memory-marker.js";
 import { getPkbRoot } from "../plugins/defaults/memory/v1/pkb/types.js";
@@ -1249,6 +1251,46 @@ describe("applyRuntimeInjections — injection mode", () => {
     expect(JSON.stringify(foreground.at(-1))).not.toContain(
       "<non_interactive_context>",
     );
+  });
+
+  test("captures the blocks wrapped around the tail in an envelope that rebuilds them from metadata", async () => {
+    const { messages: result, blocks } = await applyRuntimeInjections(
+      baseMessages,
+      fullOptions,
+    );
+    const tailTexts = result[0].content.map(
+      (b) => (b as { type: "text"; text: string }).text,
+    );
+
+    const envelope = readInjectionEnvelope(
+      injectionMetadataUpdates(blocks, false)!,
+    );
+
+    expect(envelope).not.toBeNull();
+    expect(envelope!.prefix).toEqual(
+      tailTexts.slice(0, envelope!.prefix.length),
+    );
+    expect(envelope!.suffix).toEqual(
+      tailTexts.slice(tailTexts.length - envelope!.suffix.length),
+    );
+    const core = tailTexts.slice(
+      envelope!.prefix.length,
+      tailTexts.length - envelope!.suffix.length,
+    );
+    expect(core).toContain("Hello");
+    expect(core.some((t) => t.startsWith("<NOW.md"))).toBe(true);
+    expect(
+      envelope!.prefix.some((t) => t.startsWith("<channel_command_context>")),
+    ).toBe(true);
+    expect(
+      envelope!.prefix.some((t) => t.startsWith("<active_workspace>")),
+    ).toBe(true);
+    expect(blocks.injectionEnvelope!.prefix).toContainEqual({
+      ref: "turnContextBlock",
+    });
+    expect(blocks.injectionEnvelope!.suffix).toContainEqual({
+      ref: "nonInteractiveContextBlock",
+    });
   });
 
   test("explicit mode: 'full' behaves the same as default", async () => {

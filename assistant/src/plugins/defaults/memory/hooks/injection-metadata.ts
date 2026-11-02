@@ -31,6 +31,7 @@ const PASSTHROUGH_BLOCKS: ReadonlyArray<
   ["backgroundTurnBlock", "backgroundTurnBlock"],
   ["channelCapabilitiesBlock", "channelCapabilitiesBlock"],
   ["nonInteractiveContextBlock", "nonInteractiveContextBlock"],
+  ["injectionEnvelope", "injectionEnvelope"],
 ];
 
 /**

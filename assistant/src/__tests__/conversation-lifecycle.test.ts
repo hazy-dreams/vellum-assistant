@@ -1623,6 +1623,171 @@ describe("loadFromDb metadata injection rehydration", () => {
     expect(messages[0].content).toEqual([{ type: "text", text: "Tail" }]);
   });
 
+  test("injection envelope rebuilds the wrapper blocks in assembly order around the memory region", async () => {
+    // Live assembly interleaves blocks with no dedicated key (disk pressure,
+    // open documents, transport hints, active workspace, subagent status,
+    // voice control) between the per-key ones. The envelope records the
+    // final order, referencing per-key blocks instead of repeating them.
+    mockConversation = defaultConv();
+    mockDbMessages = [
+      {
+        id: "m1",
+        role: "user",
+        content: [{ type: "text", text: "First turn" }],
+        metadata: JSON.stringify({
+          workspaceBlock: "<workspace>\nworkspace body\n</workspace>",
+          turnContextBlock: "<turn_context>\nctx payload\n</turn_context>",
+          channelCapabilitiesBlock:
+            "<channel_capabilities>\nchannel: telegram\n</channel_capabilities>",
+          memoryInjectedBlock: "mem payload",
+          pkbContextBlock: "<knowledge_base>\nkb body\n</knowledge_base>",
+          injectionEnvelope: {
+            prefix: [
+              {
+                text: "<disk_pressure_warning>\nlow\n</disk_pressure_warning>",
+              },
+              { ref: "workspaceBlock" },
+              { ref: "turnContextBlock" },
+              { text: "<active_documents>\ndoc-1\n</active_documents>" },
+              { text: "<transport_hints>\nhint\n</transport_hints>" },
+              { ref: "channelCapabilitiesBlock" },
+              { text: "<active_workspace>\napp-1\n</active_workspace>" },
+            ],
+            suffix: [
+              { text: "<voice_call_control>\nmarkers\n</voice_call_control>" },
+              { text: "<active_subagents>\nsub-1\n</active_subagents>" },
+            ],
+          },
+        }),
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+      },
+      {
+        id: "m3",
+        role: "user",
+        content: [{ type: "text", text: "Tail" }],
+      },
+    ];
+
+    const conversation = makeConversation();
+    await conversation.loadFromDb();
+    const messages = conversation.getMessages();
+
+    expect(messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "<disk_pressure_warning>\nlow\n</disk_pressure_warning>",
+      },
+      { type: "text", text: "<workspace>\nworkspace body\n</workspace>" },
+      { type: "text", text: "<turn_context>\nctx payload\n</turn_context>" },
+      { type: "text", text: "<active_documents>\ndoc-1\n</active_documents>" },
+      { type: "text", text: "<transport_hints>\nhint\n</transport_hints>" },
+      {
+        type: "text",
+        text: "<channel_capabilities>\nchannel: telegram\n</channel_capabilities>",
+      },
+      { type: "text", text: "<active_workspace>\napp-1\n</active_workspace>" },
+      { type: "text", text: "<memory>\nmem payload\n</memory>" },
+      { type: "text", text: "<knowledge_base>\nkb body\n</knowledge_base>" },
+      { type: "text", text: "First turn" },
+      {
+        type: "text",
+        text: "<voice_call_control>\nmarkers\n</voice_call_control>",
+      },
+      { type: "text", text: "<active_subagents>\nsub-1\n</active_subagents>" },
+    ]);
+  });
+
+  test("injection envelope ignores per-key wrapper blocks it does not reference", async () => {
+    // A retry re-runs a turn onto its anchor row; a block the rerun no
+    // longer injected keeps its stale per-key value, which the envelope
+    // leaves out.
+    mockConversation = defaultConv();
+    mockDbMessages = [
+      {
+        id: "m1",
+        role: "user",
+        content: [{ type: "text", text: "First turn" }],
+        metadata: JSON.stringify({
+          workspaceBlock: "<workspace>\nstale\n</workspace>",
+          turnContextBlock: "<turn_context>\nctx payload\n</turn_context>",
+          injectionEnvelope: {
+            prefix: [{ ref: "turnContextBlock" }],
+            suffix: [],
+          },
+        }),
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+      },
+    ];
+
+    const conversation = makeConversation();
+    await conversation.loadFromDb();
+
+    expect(conversation.getMessages()[0].content).toEqual([
+      { type: "text", text: "<turn_context>\nctx payload\n</turn_context>" },
+      { type: "text", text: "First turn" },
+    ]);
+  });
+
+  test("tail user row skips the injection envelope", async () => {
+    mockConversation = defaultConv();
+    mockDbMessages = [
+      {
+        id: "m1",
+        role: "user",
+        content: [{ type: "text", text: "Tail" }],
+        metadata: JSON.stringify({
+          injectionEnvelope: {
+            prefix: [{ text: "<transport_hints>\nhint\n</transport_hints>" }],
+            suffix: [{ text: "<active_subagents>\nsub\n</active_subagents>" }],
+          },
+        }),
+      },
+    ];
+
+    const conversation = makeConversation();
+    await conversation.loadFromDb();
+
+    expect(conversation.getMessages()[0].content).toEqual([
+      { type: "text", text: "Tail" },
+    ]);
+  });
+
+  test("a malformed injection envelope falls back to the per-key layout", async () => {
+    mockConversation = defaultConv();
+    mockDbMessages = [
+      {
+        id: "m1",
+        role: "user",
+        content: [{ type: "text", text: "First turn" }],
+        metadata: JSON.stringify({
+          turnContextBlock: "<turn_context>\nctx payload\n</turn_context>",
+          injectionEnvelope: { prefix: [{ ref: "notAKey" }], suffix: [] },
+        }),
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+      },
+    ];
+
+    const conversation = makeConversation();
+    await conversation.loadFromDb();
+
+    expect(conversation.getMessages()[0].content).toEqual([
+      { type: "text", text: "<turn_context>\nctx payload\n</turn_context>" },
+      { type: "text", text: "First turn" },
+    ]);
+  });
+
   test("untrusted-actor view does not rehydrate memoryV2StaticBlock", async () => {
     mockConversation = defaultConv();
     // Rows with `trusted_contact` / `unknown` provenance survive the

@@ -20,6 +20,7 @@
 
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 
+import { mergeMessageMetadata } from "../persistence/message-metadata.js";
 import type { Message } from "../providers/types.js";
 
 // ---------------------------------------------------------------------------
@@ -120,6 +121,58 @@ mock.module("../security/secret-allowlist.js", () => ({
   resetAllowlist: () => {},
 }));
 
+// Rows written for the restart conversation, so a fresh `Conversation` can
+// `loadFromDb` what the live one persisted. Other conversations persist
+// nothing, as before.
+const RESTART_CONVERSATION_ID = "conv-restart";
+interface StoredRow {
+  id: string;
+  conversationId: string;
+  role: string;
+  content: unknown[];
+  createdAt: number;
+  metadata: string | null;
+  clientMessageId: string | null;
+  finalized: number;
+}
+const storedRows: StoredRow[] = [];
+function storeRow(
+  conversationId: string,
+  role: string,
+  content: unknown[],
+  metadata: Record<string, unknown> | undefined,
+): { id: string } {
+  const id = `row-${storedRows.length + 1}`;
+  storedRows.push({
+    id,
+    conversationId,
+    role,
+    content,
+    createdAt: Date.parse("2026-03-19T12:00:00.000Z") + storedRows.length,
+    metadata: metadata ? JSON.stringify(metadata) : null,
+    clientMessageId: null,
+    finalized: 1,
+  });
+  return { id };
+}
+function findStoredRow(id: string): StoredRow | undefined {
+  return storedRows.find((row) => row.id === id);
+}
+function writeStoredContent(
+  messageId: string,
+  newContent: string,
+  metadataUpdates?: Record<string, unknown>,
+): void {
+  const row = findStoredRow(messageId);
+  if (!row) {
+    return;
+  }
+  row.content = JSON.parse(newContent);
+  if (metadataUpdates) {
+    row.metadata = mergeMessageMetadata(row.metadata, metadataUpdates);
+  }
+}
+
 mock.module("../persistence/conversation-crud.js", () => ({
   setConversationProcessingStartedAt: () => {},
   isConversationProcessing: () => false,
@@ -131,7 +184,8 @@ mock.module("../persistence/conversation-crud.js", () => ({
   }),
   getConversationOriginInterface: () => null,
   getConversationOriginChannel: () => null,
-  getMessages: () => [],
+  getMessages: (conversationId: string) =>
+    storedRows.filter((row) => row.conversationId === conversationId),
   getConversation: () => ({
     id: "conv-1",
     createdAt: Date.parse("2026-03-19T12:00:00.000Z"),
@@ -142,7 +196,15 @@ mock.module("../persistence/conversation-crud.js", () => ({
     totalOutputTokens: 0,
     totalEstimatedCost: 0,
   }),
-  addMessage: () => ({ id: "msg-1" }),
+  addMessage: (
+    conversationId: string,
+    role: string,
+    content: string,
+    options?: { metadata?: Record<string, unknown> },
+  ) =>
+    conversationId === RESTART_CONVERSATION_ID
+      ? storeRow(conversationId, role, JSON.parse(content), options?.metadata)
+      : { id: "msg-1" },
   updateConversationUsage: () => {},
   updateConversationTitle: () => {},
   updateConversationContextWindow: () => {},
@@ -152,9 +214,27 @@ mock.module("../persistence/conversation-crud.js", () => ({
   getLastUserTimestampBefore: () => 0,
   setLastNotifiedInferenceProfile: () => {},
   resolveOverrideProfile: () => undefined,
-  updateMessageMetadata: () => {},
-  reserveMessage: mock(async () => ({ id: "msg-reserve" })),
-  updateMessageContent: mock(() => {}),
+  updateMessageMetadata: (
+    messageId: string,
+    updates: Record<string, unknown>,
+  ) => {
+    const row = findStoredRow(messageId);
+    if (row) {
+      row.metadata = mergeMessageMetadata(row.metadata, updates);
+    }
+  },
+  reserveMessage: mock(
+    async (
+      conversationId: string,
+      role: string,
+      metadata?: Record<string, unknown>,
+    ) =>
+      conversationId === RESTART_CONVERSATION_ID
+        ? storeRow(conversationId, role, [], metadata)
+        : { id: "msg-reserve" },
+  ),
+  updateMessageContent: mock(writeStoredContent),
+  finalizeMessageContent: writeStoredContent,
 }));
 
 mock.module("../persistence/conversation-queries.js", () => ({
@@ -617,20 +697,107 @@ describe("prompt cache cross-turn stability: volatile first turn", () => {
   });
 });
 
-// Known cache-stability gap, documented pending a fix:
-//
-// Daemon-restart divergence: several per-turn blocks are injected into
-// in-memory history but never persisted to message metadata
-// (voice_call_control, active_workspace / active_dynamic_page,
-// channel_command_context, transport_hints, active_subagents, active_thread,
-// active_documents; injection at conversation-runtime-assembly.ts, capture
-// switch omits them). After a daemon restart or conversation eviction,
-// loadFromDb re-renders history without those blocks, so the first request of
-// the next turn diverges from the cached prefix and re-writes it in full.
-// Conversations that never use those features are unaffected.
+// Two real turns whose tails carry per-turn blocks with no dedicated metadata
+// key (a prepend and an append, like `<active_documents>` and
+// `<active_subagents>`), then a fresh `Conversation` reloads what the live one
+// persisted, as after a daemon restart or eviction.
 describe("prompt cache stability across daemon restart", () => {
-  test.todo(
-    "history re-rendered via loadFromDb is byte-identical to the in-memory history the provider cached (non-persisted per-turn blocks survive or are stripped consistently)",
-    () => {},
-  );
+  let cachedHistory: Message[] = [];
+  let cachedWire: AnthropicWireMessage[] = [];
+  let reloadedWire: AnthropicWireMessage[] = [];
+
+  beforeAll(async () => {
+    registerPluginInjectors("test-restart-wrappers", [
+      {
+        name: "test-restart-prepend",
+        order: 47,
+        async produce(ctx) {
+          if (ctx.conversationId !== RESTART_CONVERSATION_ID) {
+            return null;
+          }
+          return {
+            id: "test-restart-prepend",
+            text: `<open_panel>\nturn ${ctx.turnIndex}\n</open_panel>`,
+            placement: "prepend-user-tail",
+          };
+        },
+      },
+      {
+        name: "test-restart-append",
+        order: 55,
+        async produce(ctx) {
+          if (ctx.conversationId !== RESTART_CONVERSATION_ID) {
+            return null;
+          }
+          return {
+            id: "test-restart-append",
+            text: `<background_jobs>\nturn ${ctx.turnIndex}\n</background_jobs>`,
+            placement: "append-user-tail",
+          };
+        },
+      },
+    ]);
+
+    const { provider } = createMockProvider([
+      textResponse("ok"),
+      textResponse("ok2"),
+    ]);
+    const live = new Conversation(
+      RESTART_CONVERSATION_ID,
+      provider,
+      "system prompt",
+      () => {},
+      "/tmp",
+      { maxTokens: 4096 },
+    );
+    setConversation(live.conversationId, live);
+    await live.loadFromDb();
+    await live.processMessage({ content: "Hello", attachments: [] });
+    await live.processMessage({ content: "Follow up", attachments: [] });
+    cachedHistory = JSON.parse(JSON.stringify(live.getMessages()));
+
+    const restarted = new Conversation(
+      RESTART_CONVERSATION_ID,
+      provider,
+      "system prompt",
+      () => {},
+      "/tmp",
+      { maxTokens: 4096 },
+    );
+    restarted.setTrustContext({
+      trustClass: "guardian",
+      sourceChannel: "vellum",
+    });
+    await restarted.loadFromDb();
+
+    // Persisted rows carry internal riders the live history lacks, so parity
+    // is judged on what the provider is sent.
+    const wire = new AnthropicProvider("sk-ant-test", "claude-sonnet-4-6");
+    await wire.sendMessage(cachedHistory, { systemPrompt: "system prompt" });
+    cachedWire = (lastAnthropicParams?.messages ??
+      []) as AnthropicWireMessage[];
+    await wire.sendMessage(restarted.getMessages(), {
+      systemPrompt: "system prompt",
+    });
+    reloadedWire = (lastAnthropicParams?.messages ??
+      []) as AnthropicWireMessage[];
+  });
+
+  test("the cached history carries the per-turn wrapper blocks on both user turns", () => {
+    const userTexts = cachedHistory
+      .filter((m) => m.role === "user")
+      .map((m) => JSON.stringify(m.content));
+    expect(userTexts).toHaveLength(2);
+    for (const text of userTexts) {
+      expect(text).toContain("<open_panel>");
+      expect(text).toContain("<background_jobs>");
+    }
+  });
+
+  test("history re-rendered via loadFromDb is sent byte-identically to the in-memory history the provider cached", () => {
+    expect(cachedWire.length).toBe(4);
+    expect(JSON.stringify(reloadedWire.map(withoutAnthropicMarkers))).toBe(
+      JSON.stringify(cachedWire.map(withoutAnthropicMarkers)),
+    );
+  });
 });

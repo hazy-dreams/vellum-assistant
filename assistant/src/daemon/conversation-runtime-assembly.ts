@@ -52,6 +52,12 @@ import {
   selectSightFrameCaptureTimes,
 } from "../persistence/conversation-crud.js";
 import { isBackgroundConversationType } from "../persistence/conversation-types.js";
+import {
+  INJECTION_ENVELOPE_REF_KEYS,
+  type InjectionEnvelope,
+  type InjectionEnvelopeEntry,
+  type InjectionEnvelopeRefKey,
+} from "../persistence/injection-envelope.js";
 import { createContextSummaryMessage } from "../plugins/defaults/compaction/window-manager.js";
 import {
   countMemoryPrefixBlocks,
@@ -1891,6 +1897,16 @@ export interface RuntimeInjectionBlocks {
    */
   nonInteractiveContextBlock?: string;
   /**
+   * Every block assembly wrapped around the tail outside its memory region
+   * (Step 3 and Step 4 prepends and appends), in final order. Persisted under
+   * `metadata.injectionEnvelope` so `loadFromDb` rebuilds the blocks that have
+   * no dedicated key (`<transport_hints>`, `<active_workspace>`,
+   * `<active_documents>`, `<active_subagents>`, plugin injections, ...) in
+   * place. Undefined when nothing wrapped the tail or the history was
+   * replaced (Slack renders its transcript from rows every turn).
+   */
+  injectionEnvelope?: InjectionEnvelope;
+  /**
    * UNWRAPPED inner text of the memory-v3 frozen net-new section block the v3
    * injector attached this turn, mirroring v2's unwrapped `memoryInjectedBlock`
    * contract (rehydration re-wraps on use). Undefined when v3 attached no new
@@ -2113,6 +2129,65 @@ function applyInjectionBlock(
     }
   }
   return runMessages;
+}
+
+/** The tail message's content when the tail is a user message. */
+function userTailContent(messages: Message[]): Message["content"] | undefined {
+  const tail = messages[messages.length - 1];
+  return tail?.role === "user" ? tail.content : undefined;
+}
+
+/**
+ * The blocks wrapped around `core` on the user tail of `messages`, as a
+ * persistable envelope. A block whose text matches one of `refTexts` becomes
+ * a `ref` to that metadata key. Undefined when nothing wraps `core`, when the
+ * tail no longer holds `core` intact, or when a wrapping block is not text.
+ */
+function buildInjectionEnvelope(
+  messages: Message[],
+  core: Message["content"],
+  refTexts: Partial<Record<InjectionEnvelopeRefKey, string>>,
+): InjectionEnvelope | undefined {
+  const content = userTailContent(messages);
+  if (!content || core.length === 0) {
+    return undefined;
+  }
+  const start = content.indexOf(core[0]);
+  const end = start + core.length;
+  if (
+    start < 0 ||
+    end > content.length ||
+    core.some((block, i) => content[start + i] !== block)
+  ) {
+    return undefined;
+  }
+  if (start === 0 && end === content.length) {
+    return undefined;
+  }
+
+  const refByText = new Map<string, InjectionEnvelopeRefKey>();
+  for (const key of INJECTION_ENVELOPE_REF_KEYS) {
+    const text = refTexts[key];
+    if (text !== undefined) {
+      refByText.set(text, key);
+    }
+  }
+  const toEntries = (
+    blocks: Message["content"],
+  ): InjectionEnvelopeEntry[] | null => {
+    const entries: InjectionEnvelopeEntry[] = [];
+    for (const block of blocks) {
+      if (block.type !== "text") {
+        return null;
+      }
+      const ref = refByText.get(block.text);
+      entries.push(ref ? { ref } : { text: block.text });
+    }
+    return entries;
+  };
+  const prefix = toEntries(content.slice(0, start));
+  const suffix = toEntries(content.slice(end));
+  return prefix && suffix ? { prefix, suffix } : undefined;
 }
 
 /**
@@ -2800,6 +2875,11 @@ export async function applyRuntimeInjections(
     }
   }
 
+  // Steps 3 and 4 only prepend and append onto the tail, keeping these
+  // content blocks by identity, so the persisted envelope is read off the
+  // final tail around this snapshot.
+  const envelopeCore = historyReplaced ? undefined : userTailContent(result);
+
   // ── Step 3: hardcoded branches that stayed outside the injector chain ──
   // Their order here is load-bearing: each branch may mutate the tail
   // user message, so reordering changes how they interleave.
@@ -2940,6 +3020,16 @@ export async function applyRuntimeInjections(
       backgroundTurnBlock: backgroundTurnCaptured,
       channelCapabilitiesBlock: channelCapabilitiesCaptured,
       nonInteractiveContextBlock: nonInteractiveContextCaptured,
+      injectionEnvelope:
+        envelopeCore === undefined
+          ? undefined
+          : buildInjectionEnvelope(result, envelopeCore, {
+              workspaceBlock: workspaceCaptured,
+              backgroundTurnBlock: backgroundTurnCaptured,
+              turnContextBlock: turnContextCaptured,
+              channelCapabilitiesBlock: channelCapabilitiesCaptured,
+              nonInteractiveContextBlock: nonInteractiveContextCaptured,
+            }),
       memoryV3Active,
       injectorChainBlock,
     },

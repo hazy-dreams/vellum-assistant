@@ -60,6 +60,7 @@ import {
   setConversationProcessingStartedAt,
 } from "../persistence/conversation-crud.js";
 import { getResolvedConversationDirPath } from "../persistence/conversation-directories.js";
+import { readInjectionEnvelope } from "../persistence/injection-envelope.js";
 import { reportSlowSync } from "../persistence/slow-sync-log.js";
 import { userFacingTextOfRow } from "../persistence/user-facing-content.js";
 import { defaultCompact } from "../plugins/defaults/compaction/compact.js";
@@ -1585,13 +1586,22 @@ export class Conversation {
         try {
           const meta = JSON.parse(m.metadata);
           const isTail = index === arr.length - 1;
+          // Rows persisted with an injection envelope rebuild every block
+          // outside the memory region from it, in the order assembly placed
+          // them, and skip the per-key wrapper branches below. Rows without
+          // one keep the per-key layout.
+          const envelope = isTail ? null : readInjectionEnvelope(meta);
 
-          // `<non_interactive_context>` is the only rehydrated block that
+          // `<non_interactive_context>` is the only per-key block that
           // APPENDS to the tail (live injection appends it in Step 3), so it
           // must land after the original content. Apply it first — before the
           // prepends below — so the prepends stack in front of it and it stays
           // last, matching the live layout.
-          if (!isTail && typeof meta.nonInteractiveContextBlock === "string") {
+          if (
+            !isTail &&
+            envelope === null &&
+            typeof meta.nonInteractiveContextBlock === "string"
+          ) {
             content = [
               ...content,
               { type: "text" as const, text: meta.nonInteractiveContextBlock },
@@ -1788,14 +1798,22 @@ export class Conversation {
           // injection prepends it (Step 3) before the prepend-user-tail chain
           // blocks (Step 4), so it must be prepended BEFORE turnContextBlock
           // here to land one slot deeper than `<turn_context>`.
-          if (!isTail && typeof meta.channelCapabilitiesBlock === "string") {
+          if (
+            !isTail &&
+            envelope === null &&
+            typeof meta.channelCapabilitiesBlock === "string"
+          ) {
             content = [
               { type: "text" as const, text: meta.channelCapabilitiesBlock },
               ...content,
             ];
           }
 
-          if (!isTail && typeof meta.turnContextBlock === "string") {
+          if (
+            !isTail &&
+            envelope === null &&
+            typeof meta.turnContextBlock === "string"
+          ) {
             content = [
               { type: "text" as const, text: meta.turnContextBlock },
               ...content,
@@ -1805,17 +1823,39 @@ export class Conversation {
           // `<background_turn>` lands between `<workspace>` and `<turn_context>`
           // (injector order 15, between workspace 10 and unified-turn-context
           // 20), so prepend it AFTER turnContextBlock and BEFORE workspaceBlock.
-          if (!isTail && typeof meta.backgroundTurnBlock === "string") {
+          if (
+            !isTail &&
+            envelope === null &&
+            typeof meta.backgroundTurnBlock === "string"
+          ) {
             content = [
               { type: "text" as const, text: meta.backgroundTurnBlock },
               ...content,
             ];
           }
 
-          if (!isTail && typeof meta.workspaceBlock === "string") {
+          if (
+            !isTail &&
+            envelope === null &&
+            typeof meta.workspaceBlock === "string"
+          ) {
             content = [
               { type: "text" as const, text: meta.workspaceBlock },
               ...content,
+            ];
+          }
+
+          if (envelope !== null) {
+            content = [
+              ...envelope.prefix.map((text) => ({
+                type: "text" as const,
+                text,
+              })),
+              ...content,
+              ...envelope.suffix.map((text) => ({
+                type: "text" as const,
+                text,
+              })),
             ];
           }
         } catch {
