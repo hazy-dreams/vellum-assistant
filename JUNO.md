@@ -1,6 +1,6 @@
 # Juno custom Vellum branch
 
-This is the maintained source branch for a private, Mac-local Vellum installation. `main` stays at the upstream snapshot; custom changes live on `juno`. A source push is not a release, installation or restart.
+This is the maintained source for a private, Mac-local Vellum installation. `main` now combines the official Vellum 0.12.7 release with the complete Juno source line, including later upstream fixes. The existing `juno` branch and `checkpoint/juno-pre-v0.12.7-2026-11-04` preserve the pre-integration revision. New maintenance starts from `main`. A source push is not a release, installation or restart.
 
 ## Included
 
@@ -15,7 +15,9 @@ See [Claude runtime documentation](assistant/docs/claude-subscription.md) for in
 
 ## Source and installed-build provenance
 
-Upstream base: `146e228b4c8e9111b3c255f0b9c7a82fe2c0cd45`.
+Original upstream base: `146e228b4c8e9111b3c255f0b9c7a82fe2c0cd45`.
+
+The November 4 source integration merges official release `v0.12.7` at `25875c100149cc3c1f04d4acc3b77aca64531a83` with the pre-integration Juno tip `d4a22f9902ba25b3f833b65b519bdfc3a78d3198`. Both histories are retained, including upstream fixes newer than the release branch. Relative to the Juno tip, the merge changes release version metadata, two release-build workflow files, and this maintenance document; application implementation and dependency resolutions are unchanged. The `juno` branch remains at that tip as a historical reference, not the branch for new work.
 
 The [source baseline manifest](docs/juno-source-baseline.json) records the unchanged integration files reconciled against the installed source. Private desktop sources are normalized separately so personal machine paths are not public. Local deployment receipts must record the source commit, source/artifact hashes, toolchain, target path, signing mode and any deviations; keep those receipts outside this repository.
 
@@ -86,10 +88,10 @@ Do not run this command in the existing production graph, replace an installed a
 
 ## Maintenance discipline
 
-1. Branch from the current `juno` commit in a separate worktree; preserve unrelated dirty work.
+1. Branch from the current `main` commit in a separate worktree; preserve unrelated dirty work and the historical `juno` checkpoint.
 2. Add the smallest regression, fix it, and run relevant isolated checks. Avoid live subscription calls for routine adapter tests.
 3. Review the complete diff, including new files, for personal paths, secrets, private state and build artifacts. Test logs and deployment receipts stay outside the repository.
-4. Commit source and docs; push `juno` only. Verify the remote SHA and unchanged `main`. No automatic release or main merge.
+4. Publish source integration to `main` only with explicit approval, using a non-force update after verifying its current tip. Retain `[skip ci]` on source-only integration commits because inherited main-branch workflows can publish artifacts or send external notifications; do not dispatch those workflows or create `release/v*` branches without separate authorization. Verify the remote SHA and retained checkpoints. A source push is not a release or deployment.
 5. When a deployment is separately authorized, record its exact commit and hashes privately. Do not call it installed until process identity/readiness and intended source/artifact hashes are verified.
 
 Known open limits include the inherited abort-during-session-completion write race, native post-cancel retry behavior, unmeasured quota savings, and unverified OS reboot/restore/native-permission continuity. The custom branch is not a blanket certification of these cases.
