@@ -26,6 +26,7 @@ export const NOTIFICATION_SOURCE_CHANNELS = [
   { id: "platform", description: "Platform-managed channel" },
   { id: "a2a", description: "Agent-to-agent protocol channel" },
   { id: "discord", description: "Discord channel" },
+  { id: "imessage", description: "iMessage home line" },
   { id: "plugin", description: "Channel brought by an installed plugin" },
   {
     id: "vellum-shared",

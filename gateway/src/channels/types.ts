@@ -17,6 +17,7 @@ export const CHANNEL_IDS = [
   "email",
   "a2a",
   "discord",
+  "imessage",
   "plugin",
   "vellum-shared",
 ] as const satisfies readonly CanonicalChannelId[];

@@ -17,7 +17,14 @@ import type { ChannelId } from "./types.js";
 
 export type InboundChannelId = Extract<
   ChannelId,
-  "telegram" | "whatsapp" | "slack" | "email" | "a2a" | "discord" | "plugin"
+  | "telegram"
+  | "whatsapp"
+  | "slack"
+  | "email"
+  | "a2a"
+  | "discord"
+  | "imessage"
+  | "plugin"
 >;
 
 export type GatewayInboundAttachment = {
@@ -179,6 +186,15 @@ export type DiscordInboundEvent = InboundEventBase<"discord">;
  * reaches the runtime on `sourceMetadata`, not here.
  */
 export type PluginInboundEvent = InboundEventBase<"plugin">;
+/**
+ * Normalized from an iMessage line provider (`gateway/src/imessage/`). One-to-one
+ * only: `conversationExternalId` is the provider's chat id and
+ * `actorExternalId` the sender's handle (E.164 or an Apple ID email).
+ * `source.chatType` is the transport the message actually arrived on
+ * (`imessage`, `sms` or `rcs`); only `imessage` may match an iMessage identity,
+ * because SMS sender ids are spoofable.
+ */
+export type IMessageInboundEvent = InboundEventBase<"imessage">;
 
 export type GatewayInboundEvent =
   | TelegramInboundEvent
@@ -187,6 +203,7 @@ export type GatewayInboundEvent =
   | EmailInboundEvent
   | A2aInboundEvent
   | DiscordInboundEvent
+  | IMessageInboundEvent
   | PluginInboundEvent;
 
 /**

@@ -86,6 +86,17 @@ const CHANNEL_POLICIES = {
       conversationStrategy: "continue_existing_conversation",
     },
   },
+  imessage: {
+    notification: {
+      // The iMessage line is the home conversation. Background work reports
+      // to the assistant inside it and the assistant decides what is worth a
+      // text, so the notification pipeline never texts the guardian on its
+      // own. Replies to an inbound text route by `replyCallbackUrl` and do not
+      // read this flag.
+      deliveryEnabled: false,
+      conversationStrategy: "continue_existing_conversation",
+    },
+  },
   plugin: {
     notification: {
       // Every plugin-brought channel shares this row, so the answer has to

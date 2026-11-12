@@ -41,6 +41,10 @@ export const CHANNEL_IDS = [
   "platform",
   "a2a",
   "discord",
+  // Juno's iMessage home line, reached through a line provider (Linq first).
+  // Built in rather than a plugin channel so it keeps its own admission floor,
+  // contacts and trust records instead of sharing the `plugin` row.
+  "imessage",
   "plugin",
   // Internal id for conversations a guardian shares with a contact. It has no
   // transport: the contact's own client holds the connection.
