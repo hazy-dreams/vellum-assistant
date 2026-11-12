@@ -518,6 +518,7 @@ describe("ALL_CREDENTIAL_SPECS registration", () => {
     expect(services).toContain("whatsapp");
     expect(services).toContain("slack_channel");
     expect(services).toContain("discord_channel");
+    expect(services).toContain("linq");
     expect(services).toContain("vellum");
   });
 
@@ -526,5 +527,10 @@ describe("ALL_CREDENTIAL_SPECS registration", () => {
       (spec) => spec.service === "discord_channel",
     );
     expect(discord?.requiredFields).toEqual(["bot_token"]);
+  });
+
+  test("the linq spec requires exactly the token the wiring reads", () => {
+    const linq = ALL_CREDENTIAL_SPECS.find((spec) => spec.service === "linq");
+    expect(linq?.requiredFields).toEqual(["api_token"]);
   });
 });

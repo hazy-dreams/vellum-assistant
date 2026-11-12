@@ -274,3 +274,94 @@ describe("normalizeLinqInbound", () => {
     ).toEqual({ dropped: true, reason: "empty" });
   });
 });
+
+describe("captured live delivery", () => {
+  /**
+   * A real `message.received` captured from the relay on 2026-11-12, with the
+   * phone numbers, ids and device hash replaced. It differs from the documented
+   * example in ways that matter to a tolerant parser: every part carries five
+   * extra null fields, and the top level adds device and retention fields the
+   * reference does not list.
+   */
+  const captured = {
+    api_version: "v3",
+    webhook_version: "2026-02-03",
+    event_type: "message.received",
+    event_id: "74ae21ac-0000-4000-8000-000000000001",
+    created_at: "2026-11-12T05:58:08.478796709Z",
+    trace_id: "a9ae8992a17a95c27b318b4ee8ec73aa",
+    partner_id: "00000000-0000-4000-8000-000000000002",
+    data: {
+      chat: {
+        health_status: {
+          doc_url:
+            "https://docs.linqapp.com/channel/imessage/guides/chats/chat-health#healthy",
+          status: "HEALTHY",
+          updated_at: "2026-11-12T05:58:08.470575Z",
+        },
+        id: "d76cfe6b-0000-4000-8000-000000000003",
+        is_group: false,
+        owner_handle: {
+          handle: LINE,
+          id: "c029be0a-0000-4000-8000-000000000004",
+          is_me: true,
+          joined_at: "2026-11-12T05:58:08.39163Z",
+          left_at: null,
+          line_type: "iMessage",
+          service: "iMessage",
+          status: "active",
+        },
+      },
+      delivered_at: null,
+      device_first_seen_at: "2026-11-12T05:58:08.440588Z",
+      device_id: "0".repeat(64),
+      device_status: "first_contact",
+      direction: "inbound",
+      effect: null,
+      id: "97ffdc12-0000-4000-8000-000000000005",
+      idempotency_key: null,
+      parts: [
+        {
+          inline_stickers: null,
+          mention: null,
+          mention_range: null,
+          mentions: null,
+          text_decorations: null,
+          type: "text",
+          value: "Hi",
+        },
+      ],
+      preferred_service: null,
+      read_at: null,
+      reply_to: null,
+      sender_handle: {
+        handle: RAMON,
+        id: "098c55d0-0000-4000-8000-000000000006",
+        is_me: false,
+        joined_at: "2026-11-12T05:58:08.39163Z",
+        left_at: null,
+        service: "iMessage",
+        status: "active",
+      },
+      sent_at: "2026-11-12T05:58:04.513Z",
+      service: "iMessage",
+      zero_retention: false,
+    },
+  };
+
+  it("normalizes to an iMessage DM from the sender handle", () => {
+    const inbound = fromWebhookEnvelope(captured);
+    if (!inbound || inbound === "ignored") throw new Error("not read");
+    const result = normalizeLinqInbound(inbound, RECEIVED_AT);
+    if (result.dropped) throw new Error(`dropped: ${result.reason}`);
+    expect(result.event.actor.actorExternalId).toBe(RAMON);
+    expect(result.event.message.content).toBe("Hi");
+    expect(result.event.message.conversationExternalId).toBe(
+      "d76cfe6b-0000-4000-8000-000000000003",
+    );
+    expect(result.event.message.externalMessageId).toBe(
+      "97ffdc12-0000-4000-8000-000000000005",
+    );
+    expect(result.event.source.chatType).toBe("imessage");
+  });
+});

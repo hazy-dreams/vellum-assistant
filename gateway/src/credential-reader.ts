@@ -402,6 +402,11 @@ export const DISCORD_CHANNEL_CREDENTIAL_SPEC: ServiceCredentialSpec = {
   requiredFields: ["bot_token"],
 } as const;
 
+export const LINQ_CREDENTIAL_SPEC: ServiceCredentialSpec = {
+  service: "linq",
+  requiredFields: ["api_token"],
+} as const;
+
 export const VELLUM_CREDENTIAL_SPEC: ServiceCredentialSpec = {
   service: "vellum",
   requiredFields: ["platform_base_url", "assistant_api_key", "webhook_secret"],
@@ -413,5 +418,6 @@ export const ALL_CREDENTIAL_SPECS: readonly ServiceCredentialSpec[] = [
   WHATSAPP_CREDENTIAL_SPEC,
   SLACK_CHANNEL_CREDENTIAL_SPEC,
   DISCORD_CHANNEL_CREDENTIAL_SPEC,
+  LINQ_CREDENTIAL_SPEC,
   VELLUM_CREDENTIAL_SPEC,
 ];

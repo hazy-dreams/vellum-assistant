@@ -211,6 +211,8 @@ import { downloadSlackFile } from "./slack/download.js";
 import { slackBotContactNote } from "./slack/actor.js";
 import { DiscordGatewayClient } from "./discord/gateway-socket.js";
 import { createDiscordInboundEventHandler } from "./discord/forward.js";
+import { IMessageChannel } from "./imessage/channel.js";
+import { getGatewaySecurityDir } from "./paths.js";
 import { handleInbound } from "./handlers/handle-inbound.js";
 import { upsertContactChannel } from "./verification/contact-helpers.js";
 import { checkAuthRateLimit } from "./http/middleware/rate-limit.js";
@@ -2842,6 +2844,36 @@ async function main() {
     log.info("Discord Gateway client started");
   }
 
+  // ── iMessage home channel (Linq) lifecycle ──
+  // Credential-gated like Discord: a stored `linq:api_token` is what starts
+  // the relay listener and catch-up poller, a rotated one restarts them, and a
+  // removed one stops them. `imessage.line` pins a line on a multi-line
+  // account. Replies leave through the assistant's transport, not from here.
+  let imessageChannel: IMessageChannel | null = null;
+
+  async function startIMessageChannel(): Promise<void> {
+    if (imessageChannel) {
+      await imessageChannel.stop();
+      imessageChannel = null;
+    }
+    const token = await credentialCache.get(credentialKey("linq", "api_token"));
+    if (!token) {
+      return;
+    }
+    const line = configFileCache.getString("imessage", "line");
+    imessageChannel = new IMessageChannel({
+      config,
+      log,
+      token,
+      stateDir: getGatewaySecurityDir(),
+      notifyRecordActivity,
+      ...(line ? { line } : {}),
+    });
+    imessageChannel.start().catch((err) => {
+      log.error({ err }, "Failed to start iMessage channel");
+    });
+  }
+
   // Lazily bound below, once `remoteFeatureFlagSync` is constructed, so the
   // credential-change callback can trigger an immediate per-assistant flag
   // re-sync. On a warm-pool claim the `vellum` credentials change to the
@@ -2921,6 +2953,15 @@ async function main() {
         log.error(
           { err },
           "Failed to restart Discord Gateway after credential change",
+        );
+      });
+    }
+
+    if (changed.has("linq")) {
+      startIMessageChannel().catch((err) => {
+        log.error(
+          { err },
+          "Failed to restart iMessage channel after credential change",
         );
       });
     }
@@ -3219,6 +3260,10 @@ async function main() {
     if (discordGatewayClient) {
       discordGatewayClient.stop();
       discordGatewayClient = null;
+    }
+    if (imessageChannel) {
+      shutdownTasks.push(imessageChannel.stop());
+      imessageChannel = null;
     }
     setTimeout(() => {
       log.info("Drain window elapsed, stopping server");
